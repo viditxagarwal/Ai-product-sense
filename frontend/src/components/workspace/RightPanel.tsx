@@ -7,6 +7,7 @@ import { apiGet } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import ArtifactViewer from "./ArtifactViewer";
 import ExecutionInspector from "./ExecutionInspector";
+import ChangesTab from "./ChangesTab";
 import type { FileChange } from "@/types";
 
 const TABS = [
@@ -63,15 +64,7 @@ export default function RightPanel() {
 
         {activeRightTab === "inspector" && <ExecutionInspector />}
 
-        {activeRightTab === "changes" && (
-          <div className="flex h-full flex-col items-center justify-center p-4 text-center">
-            <GitCompare className="size-8 text-slate-300" />
-            <p className="mt-2 text-sm text-slate-400">Changes Review</p>
-            <p className="mt-1 text-xs text-slate-300">
-              Targeted edits will appear here for accept/reject review
-            </p>
-          </div>
-        )}
+        {activeRightTab === "changes" && <ChangesTab />}
       </div>
     </div>
   );
