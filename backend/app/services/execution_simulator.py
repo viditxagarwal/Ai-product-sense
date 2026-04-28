@@ -3,16 +3,447 @@
 Reads the workflow graph, walks each node with realistic delays,
 creates DB records (runs, steps, messages, files), and streams
 events through a callback. Will be replaced by a real agent executor.
+
+v2: Creates realistic Excel DCF models and markdown summaries.
+    Handles subsequent runs with targeted edits based on user message keywords.
 """
 
 import asyncio
+import io
 import random
+import re
 import uuid
 from datetime import datetime, timezone
 
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
 from app.database import supabase
 
-# --- Fake output generators per node type ---
+# ── Constants ─────────────────────────────────────────────────
+COST_PER_TOKEN = 0.000003  # ~$3 per 1M tokens
+STORAGE_BUCKET = "documents"
+
+# ── DCF Model defaults ───────────────────────────────────────
+DCF_DEFAULTS = {
+    "wacc": 9.2,
+    "terminal_growth": 2.5,
+    "revenue_2025": 1_200_000,
+    "revenue_growth": 12.0,
+    "ebitda_margin": 22.0,
+    "capex_pct": 5.0,
+    "tax_rate": 25.0,
+    "discount_rate": 9.2,
+}
+
+MODIFY_KEYWORDS = {"change", "update", "modify", "adjust", "revise", "set"}
+APPEND_KEYWORDS = {"add", "append", "include", "insert", "extend"}
+
+
+# ══════════════════════════════════════════════════════════════
+# File creation helpers
+# ══════════════════════════════════════════════════════════════
+
+def _create_dcf_excel(params: dict | None = None) -> bytes:
+    """Create a realistic DCF model Excel workbook and return as bytes."""
+    p = {**DCF_DEFAULTS, **(params or {})}
+    wb = openpyxl.Workbook()
+
+    header_font = Font(bold=True, size=11, color="FFFFFF")
+    header_fill = PatternFill(start_color="2D3748", end_color="2D3748", fill_type="solid")
+    currency_fmt = '#,##0'
+    pct_fmt = '0.0%'
+    thin_border = Border(
+        left=Side(style="thin", color="D1D5DB"),
+        right=Side(style="thin", color="D1D5DB"),
+        top=Side(style="thin", color="D1D5DB"),
+        bottom=Side(style="thin", color="D1D5DB"),
+    )
+
+    def _style_header(ws, row, cols):
+        for c in range(1, cols + 1):
+            cell = ws.cell(row=row, column=c)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center")
+
+    # ── Sheet 1: Assumptions ──────────────────────────────
+    ws_a = wb.active
+    ws_a.title = "Assumptions"
+    ws_a.column_dimensions["A"].width = 25
+    ws_a.column_dimensions["B"].width = 15
+
+    assumptions = [
+        ("Parameter", "Value"),
+        ("WACC (%)", p["wacc"]),
+        ("Terminal Growth Rate (%)", p["terminal_growth"]),
+        ("Revenue 2025 ($)", p["revenue_2025"]),
+        ("Revenue Growth (%)", p["revenue_growth"]),
+        ("EBITDA Margin (%)", p["ebitda_margin"]),
+        ("CapEx (% of Revenue)", p["capex_pct"]),
+        ("Tax Rate (%)", p["tax_rate"]),
+        ("Discount Rate (%)", p["discount_rate"]),
+    ]
+    for r, (label, val) in enumerate(assumptions, 1):
+        ws_a.cell(row=r, column=1, value=label).border = thin_border
+        ws_a.cell(row=r, column=2, value=val).border = thin_border
+    _style_header(ws_a, 1, 2)
+
+    # ── Sheet 2: Revenue Projections ──────────────────────
+    ws_r = wb.create_sheet("Revenue")
+    years = list(range(2025, 2030))
+    ws_r.cell(row=1, column=1, value="Year")
+    for ci, yr in enumerate(years, 2):
+        ws_r.cell(row=1, column=ci, value=yr)
+    _style_header(ws_r, 1, len(years) + 1)
+
+    rev = p["revenue_2025"]
+    revenues = []
+    for yr in years:
+        revenues.append(round(rev))
+        rev *= 1 + p["revenue_growth"] / 100
+
+    metrics = {
+        "Revenue ($)": revenues,
+        "EBITDA ($)": [round(r * p["ebitda_margin"] / 100) for r in revenues],
+        "CapEx ($)": [round(r * p["capex_pct"] / 100) for r in revenues],
+        "Tax ($)": [round(r * p["ebitda_margin"] / 100 * p["tax_rate"] / 100) for r in revenues],
+        "Free Cash Flow ($)": [],
+    }
+    # FCF = EBITDA - CapEx - Tax
+    metrics["Free Cash Flow ($)"] = [
+        metrics["EBITDA ($)"][i] - metrics["CapEx ($)"][i] - metrics["Tax ($)"][i]
+        for i in range(len(years))
+    ]
+
+    for ri, (label, vals) in enumerate(metrics.items(), 2):
+        ws_r.cell(row=ri, column=1, value=label).border = thin_border
+        for ci, v in enumerate(vals, 2):
+            cell = ws_r.cell(row=ri, column=ci, value=v)
+            cell.number_format = currency_fmt
+            cell.border = thin_border
+    ws_r.column_dimensions["A"].width = 22
+
+    # ── Sheet 3: DCF Calculation ──────────────────────────
+    ws_d = wb.create_sheet("DCF")
+    ws_d.column_dimensions["A"].width = 28
+    ws_d.column_dimensions["B"].width = 18
+
+    fcf = metrics["Free Cash Flow ($)"]
+    discount = p["discount_rate"] / 100
+
+    pv_fcfs = [round(f / (1 + discount) ** (i + 1)) for i, f in enumerate(fcf)]
+    terminal_value = round(fcf[-1] * (1 + p["terminal_growth"] / 100) / (discount - p["terminal_growth"] / 100))
+    pv_terminal = round(terminal_value / (1 + discount) ** len(years))
+    enterprise_value = sum(pv_fcfs) + pv_terminal
+
+    dcf_rows = [
+        ("Metric", "Value"),
+        ("PV of FCF (Year 1)", pv_fcfs[0]),
+        ("PV of FCF (Year 2)", pv_fcfs[1]),
+        ("PV of FCF (Year 3)", pv_fcfs[2]),
+        ("PV of FCF (Year 4)", pv_fcfs[3]),
+        ("PV of FCF (Year 5)", pv_fcfs[4]),
+        ("Terminal Value", terminal_value),
+        ("PV of Terminal Value", pv_terminal),
+        ("", ""),
+        ("Enterprise Value", enterprise_value),
+    ]
+    for r, (label, val) in enumerate(dcf_rows, 1):
+        ws_d.cell(row=r, column=1, value=label).border = thin_border
+        cell = ws_d.cell(row=r, column=2, value=val)
+        cell.border = thin_border
+        if isinstance(val, (int, float)) and val:
+            cell.number_format = currency_fmt
+    _style_header(ws_d, 1, 2)
+    # Highlight enterprise value
+    ws_d.cell(row=10, column=2).font = Font(bold=True, size=12, color="1A7F37")
+
+    # ── Sheet 4: Summary ──────────────────────────────────
+    ws_s = wb.create_sheet("Summary")
+    ws_s.column_dimensions["A"].width = 30
+    ws_s.column_dimensions["B"].width = 20
+    summary_rows = [
+        ("Key Metric", "Value"),
+        ("WACC", f"{p['wacc']}%"),
+        ("Terminal Growth", f"{p['terminal_growth']}%"),
+        ("5-Year Revenue CAGR", f"{p['revenue_growth']}%"),
+        ("Average FCF Margin", f"{round(sum(fcf) / sum(revenues) * 100, 1)}%"),
+        ("Enterprise Value ($)", f"${enterprise_value:,}"),
+        ("Terminal Value (% of EV)", f"{round(pv_terminal / enterprise_value * 100, 1)}%"),
+    ]
+    for r, (label, val) in enumerate(summary_rows, 1):
+        ws_s.cell(row=r, column=1, value=label).border = thin_border
+        ws_s.cell(row=r, column=2, value=val).border = thin_border
+    _style_header(ws_s, 1, 2)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _create_analysis_md(params: dict | None = None) -> str:
+    """Create a markdown analysis summary."""
+    p = {**DCF_DEFAULTS, **(params or {})}
+    return f"""# DCF Valuation Analysis Summary
+
+## Overview
+This analysis presents a Discounted Cash Flow (DCF) valuation model with a 5-year projection period (2025-2029).
+
+## Key Assumptions
+| Parameter | Value |
+|-----------|-------|
+| WACC | {p['wacc']}% |
+| Terminal Growth Rate | {p['terminal_growth']}% |
+| Base Revenue (2025) | ${p['revenue_2025']:,} |
+| Revenue Growth | {p['revenue_growth']}% |
+| EBITDA Margin | {p['ebitda_margin']}% |
+
+## Methodology
+1. **Revenue Projections**: Based on {p['revenue_growth']}% annual growth from a ${p['revenue_2025']:,} base
+2. **EBITDA Calculation**: Applied {p['ebitda_margin']}% margin to projected revenues
+3. **Free Cash Flow**: EBITDA less CapEx ({p['capex_pct']}% of revenue) and taxes ({p['tax_rate']}%)
+4. **Terminal Value**: Gordon Growth Model with {p['terminal_growth']}% perpetual growth
+5. **Discounting**: All cash flows discounted at WACC of {p['wacc']}%
+
+## Key Findings
+- The model projects steady revenue growth over the forecast period
+- Free cash flow margins remain healthy throughout the projection
+- Terminal value represents a significant portion of total enterprise value
+- Sensitivity to WACC changes is moderate (±1% WACC = ~15% EV change)
+
+## Risk Factors
+- Revenue growth assumptions may be optimistic in a downturn
+- EBITDA margins could compress with increased competition
+- Terminal growth rate should not exceed long-term GDP growth
+
+## Recommendation
+Based on the analysis, the valuation appears reasonable under the current assumptions. We recommend performing sensitivity analysis on WACC and terminal growth rate before finalizing.
+
+---
+*Generated by AI Product Studio — DCF Analysis Module*
+"""
+
+
+def _upload_to_storage(thread_id: str, file_name: str, content: bytes, content_type: str) -> str:
+    """Upload file to Supabase Storage and return the public URL."""
+    path = f"threads/{thread_id}/{file_name}"
+    try:
+        supabase.storage.from_(STORAGE_BUCKET).upload(
+            path, content, {"content-type": content_type, "upsert": "true"}
+        )
+        result = supabase.storage.from_(STORAGE_BUCKET).get_public_url(path)
+        return result
+    except Exception:
+        # Fallback: return a placeholder URL if storage isn't configured
+        return f"/storage/{STORAGE_BUCKET}/{path}"
+
+
+def _detect_user_intent(message: str) -> str:
+    """Detect whether the user wants to modify, append, or just query."""
+    lower = message.lower()
+    if any(kw in lower for kw in MODIFY_KEYWORDS):
+        return "modify"
+    if any(kw in lower for kw in APPEND_KEYWORDS):
+        return "append"
+    return "query"
+
+
+def _extract_wacc_value(message: str) -> float | None:
+    """Try to extract a WACC percentage from the message."""
+    match = re.search(r'wacc\s*(?:to|=|:)?\s*(\d+\.?\d*)\s*%?', message, re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+    # Also try generic percentage patterns
+    match = re.search(r'(\d+\.?\d*)\s*%', message)
+    if match:
+        val = float(match.group(1))
+        if 3 <= val <= 30:  # Reasonable WACC range
+            return val
+    return None
+
+
+def _get_existing_files(thread_id: str) -> list[dict]:
+    """Get existing AI-generated files for this thread."""
+    result = supabase.table("thread_files").select("*").eq(
+        "thread_id", thread_id
+    ).eq("source", "ai_generated").execute()
+    return result.data or []
+
+
+def _get_latest_version(file_id: str) -> dict | None:
+    """Get the latest version of a file."""
+    result = supabase.table("file_versions").select("*").eq(
+        "file_id", file_id
+    ).order("version_number", desc=True).limit(1).execute()
+    return result.data[0] if result.data else None
+
+
+def _modify_excel_cells(thread_id: str, file_record: dict, step_id: str,
+                        user_message: str, send_event_sync=None) -> dict:
+    """Modify specific cells in an existing Excel file, create version + changes."""
+    file_id = file_record["id"]
+    latest_version = _get_latest_version(file_id)
+    new_version_num = (latest_version["version_number"] + 1) if latest_version else 2
+
+    # Determine what to change
+    new_wacc = _extract_wacc_value(user_message)
+    changes_to_make = []
+
+    if new_wacc is not None:
+        changes_to_make.append({
+            "location": "Assumptions!B2",
+            "old_value": str(DCF_DEFAULTS["wacc"]),
+            "new_value": str(new_wacc),
+            "reason": f"User requested WACC adjustment to {new_wacc}%",
+            "downstream_impact": {"affected_cells_count": 6, "affected_sheets": ["DCF", "Summary"]},
+        })
+        # Downstream: discount rate also changes
+        changes_to_make.append({
+            "location": "Assumptions!B9",
+            "old_value": str(DCF_DEFAULTS["discount_rate"]),
+            "new_value": str(new_wacc),
+            "reason": "Discount rate updated to match new WACC",
+            "downstream_impact": {"affected_cells_count": 5, "affected_sheets": ["DCF"]},
+        })
+        # Summary WACC cell
+        changes_to_make.append({
+            "location": "Summary!B2",
+            "old_value": f"{DCF_DEFAULTS['wacc']}%",
+            "new_value": f"{new_wacc}%",
+            "reason": "Summary updated to reflect new WACC",
+            "downstream_impact": None,
+        })
+    else:
+        # Random modifications if no specific value detected
+        random_changes = [
+            {
+                "location": "Assumptions!B5",
+                "old_value": str(DCF_DEFAULTS["revenue_growth"]),
+                "new_value": str(round(random.uniform(8, 18), 1)),
+                "reason": "Revenue growth adjusted based on updated market analysis",
+                "downstream_impact": {"affected_cells_count": 10, "affected_sheets": ["Revenue", "DCF", "Summary"]},
+            },
+            {
+                "location": "Assumptions!B6",
+                "old_value": str(DCF_DEFAULTS["ebitda_margin"]),
+                "new_value": str(round(random.uniform(18, 28), 1)),
+                "reason": "EBITDA margin revised per latest operational data",
+                "downstream_impact": {"affected_cells_count": 5, "affected_sheets": ["Revenue", "DCF"]},
+            },
+        ]
+        changes_to_make = random.sample(random_changes, k=random.randint(1, 2))
+
+    # Re-create the Excel file with new params (simplified: use defaults + overrides)
+    params = dict(DCF_DEFAULTS)
+    for ch in changes_to_make:
+        if "WACC" in ch["location"] or "B2" in ch["location"]:
+            try:
+                params["wacc"] = float(ch["new_value"])
+            except ValueError:
+                pass
+        if "B9" in ch["location"]:
+            try:
+                params["discount_rate"] = float(ch["new_value"])
+            except ValueError:
+                pass
+        if "B5" in ch["location"]:
+            try:
+                params["revenue_growth"] = float(ch["new_value"])
+            except ValueError:
+                pass
+        if "B6" in ch["location"]:
+            try:
+                params["ebitda_margin"] = float(ch["new_value"])
+            except ValueError:
+                pass
+
+    excel_bytes = _create_dcf_excel(params)
+    file_name = file_record["file_name"]
+    file_url = _upload_to_storage(thread_id, file_name, excel_bytes,
+                                  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # Update thread_files record
+    supabase.table("thread_files").update({
+        "file_url": file_url,
+        "current_version": new_version_num,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", file_id).execute()
+
+    # Create new file version
+    version_record = supabase.table("file_versions").insert({
+        "file_id": file_id,
+        "version_number": new_version_num,
+        "file_url": file_url,
+        "operation_type": "targeted_edit",
+        "change_summary": {"changes_count": len(changes_to_make), "primary_change": changes_to_make[0]["reason"]},
+        "created_by": "ai",
+        "trigger_step_id": step_id,
+    }).execute()
+    version_id = version_record.data[0]["id"]
+
+    # Create file_changes records
+    created_changes = []
+    for ch in changes_to_make:
+        change_record = supabase.table("file_changes").insert({
+            "file_version_id": version_id,
+            "change_type": "cell_modify",
+            "location": ch["location"],
+            "old_value": ch["old_value"],
+            "new_value": ch["new_value"],
+            "reason": ch["reason"],
+            "downstream_impact": ch["downstream_impact"],
+            "status": "pending",
+        }).execute()
+        created_changes.append(change_record.data[0])
+
+    return {
+        "file_id": file_id,
+        "file_name": file_name,
+        "version_number": new_version_num,
+        "changes_count": len(changes_to_make),
+        "changes": changes_to_make,
+    }
+
+
+def _append_to_file(thread_id: str, file_record: dict, step_id: str, user_message: str) -> dict:
+    """Create an append version for a file."""
+    file_id = file_record["id"]
+    latest_version = _get_latest_version(file_id)
+    new_version_num = (latest_version["version_number"] + 1) if latest_version else 2
+
+    summary = {
+        "action": "append",
+        "description": f"Added new section based on: {user_message[:100]}",
+        "content_added": "New analysis section with additional data points",
+    }
+
+    supabase.table("thread_files").update({
+        "current_version": new_version_num,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", file_id).execute()
+
+    supabase.table("file_versions").insert({
+        "file_id": file_id,
+        "version_number": new_version_num,
+        "file_url": file_record["file_url"],
+        "operation_type": "append",
+        "change_summary": summary,
+        "created_by": "ai",
+        "trigger_step_id": step_id,
+    }).execute()
+
+    return {
+        "file_id": file_id,
+        "file_name": file_record["file_name"],
+        "version_number": new_version_num,
+        "operation": "append",
+    }
+
+
+# ══════════════════════════════════════════════════════════════
+# Node simulators
+# ══════════════════════════════════════════════════════════════
 
 NODE_SIMULATORS: dict[str, callable] = {}
 
@@ -25,7 +456,7 @@ def _reg(node_type: str):
 
 
 @_reg("agent_node")
-def _sim_agent(node):
+def _sim_agent(node, **_):
     return {
         "output_payload": {"response": f"Analyzed input and produced structured output for '{node.get('data', {}).get('label', 'Node')}'."},
         "tokens": random.randint(800, 2000),
@@ -34,7 +465,7 @@ def _sim_agent(node):
 
 
 @_reg("route")
-def _sim_route(node):
+def _sim_route(node, **_):
     paths = ["path_a", "path_b", "default"]
     chosen = random.choice(paths)
     confidence = round(random.uniform(0.65, 0.98), 2)
@@ -48,7 +479,7 @@ def _sim_route(node):
 
 
 @_reg("retriever")
-def _sim_retriever(node):
+def _sim_retriever(node, **_):
     doc_count = random.randint(2, 5)
     docs = [{"title": f"Document {i+1}", "relevance": round(random.uniform(0.7, 0.99), 2)} for i in range(doc_count)]
     return {
@@ -59,7 +490,7 @@ def _sim_retriever(node):
 
 
 @_reg("calculator")
-def _sim_calculator(node):
+def _sim_calculator(node, **_):
     result = round(random.uniform(1000, 50000000), 2)
     return {
         "output_payload": {"calculation": "DCF Valuation", "result": result, "currency": "USD"},
@@ -69,7 +500,7 @@ def _sim_calculator(node):
 
 
 @_reg("validator")
-def _sim_validator(node):
+def _sim_validator(node, **_):
     checks = ["never_fabricate", "source_grounding", "calculation_accuracy"]
     results = {c: random.choice(["passed", "passed", "passed", "warning"]) for c in checks}
     return {
@@ -81,17 +512,45 @@ def _sim_validator(node):
 
 
 @_reg("file_writer")
-def _sim_file_writer(node):
-    return {
-        "output_payload": {"action": "file_creation"},
-        "file_operation_type": "creation",
-        "tokens": random.randint(500, 1500),
-        "result_summary": "Created output file",
-    }
+def _sim_file_writer(node, **kwargs):
+    """Enhanced: context-aware file operations."""
+    context = kwargs.get("context", {})
+    existing_files = context.get("existing_files", [])
+    intent = context.get("intent", "query")
+
+    if not existing_files:
+        # First run: creation
+        return {
+            "output_payload": {"action": "file_creation", "files": ["DCF_Model.xlsx", "Analysis_Summary.md"]},
+            "file_operation_type": "creation",
+            "tokens": random.randint(500, 1500),
+            "result_summary": "Created DCF_Model.xlsx and Analysis_Summary.md",
+        }
+    elif intent == "modify":
+        return {
+            "output_payload": {"action": "targeted_edit"},
+            "file_operation_type": "targeted_edit",
+            "tokens": random.randint(500, 1200),
+            "result_summary": "Applied targeted modifications to existing files",
+        }
+    elif intent == "append":
+        return {
+            "output_payload": {"action": "append"},
+            "file_operation_type": "append",
+            "tokens": random.randint(300, 800),
+            "result_summary": "Appended new content to existing files",
+        }
+    else:
+        return {
+            "output_payload": {"action": "no_file_change"},
+            "file_operation_type": "none",
+            "tokens": random.randint(200, 600),
+            "result_summary": "Reviewed files without modification",
+        }
 
 
 @_reg("parallelization")
-def _sim_parallel(node):
+def _sim_parallel(node, **_):
     branch_count = node.get("data", {}).get("branchCount", 3)
     return {
         "output_payload": {"branches_executed": branch_count, "merge_method": "concatenate"},
@@ -101,7 +560,7 @@ def _sim_parallel(node):
 
 
 @_reg("loop")
-def _sim_loop(node):
+def _sim_loop(node, **_):
     iterations = random.randint(1, 3)
     return {
         "output_payload": {"iterations": iterations, "exit_reason": "quality_threshold_met"},
@@ -111,7 +570,7 @@ def _sim_loop(node):
 
 
 @_reg("human_review")
-def _sim_human(node):
+def _sim_human(node, **_):
     return {
         "output_payload": {"status": "auto_approved", "note": "Simulated human approval"},
         "tokens": 0,
@@ -120,7 +579,7 @@ def _sim_human(node):
 
 
 @_reg("end")
-def _sim_end(node):
+def _sim_end(node, **_):
     return {
         "output_payload": {"status": "workflow_complete"},
         "tokens": 0,
@@ -128,7 +587,7 @@ def _sim_end(node):
     }
 
 
-def _default_sim(node):
+def _default_sim(node, **_):
     return {
         "output_payload": {"result": "Step completed"},
         "tokens": random.randint(100, 500),
@@ -136,8 +595,9 @@ def _default_sim(node):
     }
 
 
-COST_PER_TOKEN = 0.000003  # ~$3 per 1M tokens
-
+# ══════════════════════════════════════════════════════════════
+# Graph ordering
+# ══════════════════════════════════════════════════════════════
 
 def _get_nodes_in_order(graph_data: dict) -> list[dict]:
     """Extract nodes from graph_data, attempt topological order via edges."""
@@ -147,7 +607,6 @@ def _get_nodes_in_order(graph_data: dict) -> list[dict]:
     if not nodes:
         return []
 
-    # Build adjacency for simple ordering
     node_map = {n["id"]: n for n in nodes}
     in_degree = {n["id"]: 0 for n in nodes}
     adj = {n["id"]: [] for n in nodes}
@@ -179,6 +638,10 @@ def _get_nodes_in_order(graph_data: dict) -> list[dict]:
     return ordered
 
 
+# ══════════════════════════════════════════════════════════════
+# Main simulation entry point
+# ══════════════════════════════════════════════════════════════
+
 async def simulate_execution(thread_id: str, user_message: str, send_event):
     """Run the simulation. send_event is an async callable that sends a dict to the WebSocket."""
 
@@ -198,6 +661,17 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
 
     if not nodes:
         nodes = [{"id": "default", "type": "agent_node", "data": {"label": "Default Agent"}}]
+
+    # Check for existing files and determine user intent
+    existing_files = _get_existing_files(thread_id)
+    intent = _detect_user_intent(user_message)
+
+    context = {
+        "existing_files": existing_files,
+        "intent": intent,
+        "user_message": user_message,
+        "thread_id": thread_id,
+    }
 
     # Create user message
     user_msg = supabase.table("thread_messages").insert({
@@ -226,6 +700,7 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
     total_cost = 0.0
     total_duration = 0
     created_files = []
+    modified_files = []
 
     try:
         for i, node in enumerate(nodes):
@@ -270,9 +745,9 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
                     "content": progress_texts[c % len(progress_texts)],
                 })
 
-            # Generate simulated output
+            # Generate simulated output (with context for file_writer)
             simulator = NODE_SIMULATORS.get(node_type, _default_sim)
-            sim_result = simulator(node)
+            sim_result = simulator(node, context=context)
 
             tokens = sim_result.get("tokens", 100)
             cost = round(tokens * COST_PER_TOKEN, 4)
@@ -296,46 +771,47 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
             }
             supabase.table("execution_steps").update(update_payload).eq("id", step_id).execute()
 
-            step_completed_event = {
+            await send_event({
                 "type": "step_completed",
                 "step_id": step_id,
                 "step_number": step_number,
                 "duration_ms": duration_ms,
                 "result_summary": sim_result.get("result_summary", "Done"),
                 "file_operation_type": file_op,
-            }
-            await send_event(step_completed_event)
+            })
 
-            # If file_writer node, create actual file record
+            # ── Handle file operations ────────────────────────
             if node_type == "file_writer" or file_op == "creation":
-                file_name = f"output_{step_number}_{uuid.uuid4().hex[:6]}.md"
-                file_record = supabase.table("thread_files").insert({
-                    "thread_id": thread_id,
-                    "file_name": file_name,
-                    "file_url": f"/simulated/{file_name}",
-                    "file_type": "text/markdown",
-                    "source": "ai_generated",
-                }).execute()
-                fid = file_record.data[0]["id"]
+                if not existing_files:
+                    # FIRST RUN: Create real Excel + Markdown files
+                    created_files.extend(
+                        await _create_initial_files(thread_id, step_id, send_event)
+                    )
+                elif file_op == "targeted_edit":
+                    # SUBSEQUENT RUN: Modify existing Excel
+                    excel_files = [f for f in existing_files if f["file_name"].endswith(".xlsx")]
+                    for ef in excel_files:
+                        mod_result = _modify_excel_cells(thread_id, ef, step_id, user_message)
+                        modified_files.append(mod_result)
+                        await send_event({
+                            "type": "file_modified",
+                            "file_id": mod_result["file_id"],
+                            "file_name": mod_result["file_name"],
+                            "file_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            "changes_count": mod_result["changes_count"],
+                        })
+                elif file_op == "append":
+                    for ef in existing_files:
+                        append_result = _append_to_file(thread_id, ef, step_id, user_message)
+                        modified_files.append(append_result)
+                        await send_event({
+                            "type": "file_modified",
+                            "file_id": append_result["file_id"],
+                            "file_name": append_result["file_name"],
+                            "operation": "append",
+                        })
 
-                supabase.table("file_versions").insert({
-                    "file_id": fid,
-                    "version_number": 1,
-                    "file_url": f"/simulated/{file_name}",
-                    "operation_type": "creation",
-                    "created_by": "ai",
-                    "trigger_step_id": step_id,
-                }).execute()
-
-                created_files.append({"file_id": fid, "file_name": file_name, "file_type": "text/markdown"})
-                await send_event({
-                    "type": "file_created",
-                    "file_id": fid,
-                    "file_name": file_name,
-                    "file_type": "text/markdown",
-                })
-
-        # Complete the run
+        # ── Complete the run ──────────────────────────────────
         supabase.table("execution_runs").update({
             "status": "completed",
             "total_duration_ms": total_duration,
@@ -353,14 +829,12 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
             "total_cost_usd": round(total_cost, 4),
         })
 
-        # Create assistant message
-        assistant_content = (
-            f"I've completed the analysis using the {workflow.data.get('workflow_name', 'workflow')} workflow. "
-            f"Processed {len(nodes)} steps in {total_duration/1000:.1f}s using {total_tokens} tokens."
+        # ── Create assistant message ──────────────────────────
+        assistant_content = _build_assistant_message(
+            workflow.data.get("workflow_name", "workflow"),
+            nodes, total_duration, total_tokens,
+            created_files, modified_files, intent
         )
-        if created_files:
-            file_list = ", ".join(f["file_name"] for f in created_files)
-            assistant_content += f"\n\nGenerated files: {file_list}"
 
         supabase.table("thread_messages").insert({
             "thread_id": thread_id,
@@ -389,3 +863,116 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", run_id).execute()
         await send_event({"type": "run_failed", "run_id": run_id, "error": str(e)})
+
+
+async def _create_initial_files(thread_id: str, step_id: str, send_event) -> list[dict]:
+    """Create Excel DCF model + Markdown summary on first run."""
+    created = []
+
+    # 1. Excel DCF Model
+    excel_bytes = _create_dcf_excel()
+    excel_name = "DCF_Model.xlsx"
+    excel_url = _upload_to_storage(
+        thread_id, excel_name, excel_bytes,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    excel_record = supabase.table("thread_files").insert({
+        "thread_id": thread_id,
+        "file_name": excel_name,
+        "file_url": excel_url,
+        "file_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "source": "ai_generated",
+        "file_size_bytes": len(excel_bytes),
+    }).execute()
+    excel_id = excel_record.data[0]["id"]
+
+    supabase.table("file_versions").insert({
+        "file_id": excel_id,
+        "version_number": 1,
+        "file_url": excel_url,
+        "operation_type": "creation",
+        "created_by": "ai",
+        "trigger_step_id": step_id,
+    }).execute()
+
+    created.append({"file_id": excel_id, "file_name": excel_name,
+                     "file_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
+    await send_event({
+        "type": "file_created",
+        "file_id": excel_id,
+        "file_name": excel_name,
+        "file_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    })
+
+    # 2. Markdown Analysis Summary
+    md_content = _create_analysis_md()
+    md_name = "Analysis_Summary.md"
+    md_bytes = md_content.encode("utf-8")
+    md_url = _upload_to_storage(thread_id, md_name, md_bytes, "text/markdown")
+
+    md_record = supabase.table("thread_files").insert({
+        "thread_id": thread_id,
+        "file_name": md_name,
+        "file_url": md_url,
+        "file_type": "text/markdown",
+        "source": "ai_generated",
+        "file_size_bytes": len(md_bytes),
+    }).execute()
+    md_id = md_record.data[0]["id"]
+
+    supabase.table("file_versions").insert({
+        "file_id": md_id,
+        "version_number": 1,
+        "file_url": md_url,
+        "operation_type": "creation",
+        "created_by": "ai",
+        "trigger_step_id": step_id,
+    }).execute()
+
+    created.append({"file_id": md_id, "file_name": md_name, "file_type": "text/markdown"})
+    await send_event({
+        "type": "file_created",
+        "file_id": md_id,
+        "file_name": md_name,
+        "file_type": "text/markdown",
+    })
+
+    return created
+
+
+def _build_assistant_message(
+    workflow_name: str, nodes: list, total_duration: int, total_tokens: int,
+    created_files: list, modified_files: list, intent: str
+) -> str:
+    """Build a contextual assistant response message."""
+    msg = (
+        f"I've completed the analysis using the **{workflow_name}** workflow. "
+        f"Processed {len(nodes)} steps in {total_duration / 1000:.1f}s using {total_tokens:,} tokens.\n\n"
+    )
+
+    if created_files:
+        msg += "### Generated Files\n"
+        for f in created_files:
+            msg += f"- **{f['file_name']}** — "
+            if f["file_name"].endswith(".xlsx"):
+                msg += "DCF model with Assumptions, Revenue Projections, DCF Calculation, and Summary sheets\n"
+            elif f["file_name"].endswith(".md"):
+                msg += "Analysis narrative with methodology, key findings, and risk factors\n"
+            else:
+                msg += "Output file\n"
+
+    if modified_files:
+        msg += "\n### Modifications Made\n"
+        for m in modified_files:
+            if "changes_count" in m:
+                msg += f"- **{m['file_name']}** (v{m['version_number']}) — {m['changes_count']} targeted change(s)\n"
+                for ch in m.get("changes", []):
+                    msg += f"  - `{ch['location']}`: {ch['old_value']} → {ch['new_value']} — *{ch['reason']}*\n"
+            elif m.get("operation") == "append":
+                msg += f"- **{m['file_name']}** (v{m['version_number']}) — Content appended\n"
+
+    if not created_files and not modified_files and intent == "query":
+        msg += "No file modifications were needed for this query. The existing files remain unchanged."
+
+    return msg
