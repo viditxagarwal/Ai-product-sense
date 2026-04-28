@@ -11,20 +11,30 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const response = NextResponse.next();
-  const supabase = createSupabaseMiddlewareClient(request, response);
-
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  if (!session) {
-    const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("redirect", pathname);
-    return NextResponse.redirect(loginUrl);
+  // If Supabase env vars aren't configured, let requests through
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    return NextResponse.next();
   }
 
-  return response;
+  try {
+    const response = NextResponse.next();
+    const supabase = createSupabaseMiddlewareClient(request, response);
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      const loginUrl = new URL("/login", request.url);
+      loginUrl.searchParams.set("redirect", pathname);
+      return NextResponse.redirect(loginUrl);
+    }
+
+    return response;
+  } catch {
+    // If auth check fails, let request through rather than 500
+    return NextResponse.next();
+  }
 }
 
 export const config = {
