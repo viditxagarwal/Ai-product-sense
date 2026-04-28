@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { Send, Paperclip, Loader2, X } from "lucide-react";
+import { Send, Paperclip, Loader2, X, Crosshair } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiPost } from "@/lib/api";
 import { useThreadStore } from "@/stores/thread-store";
@@ -14,7 +14,8 @@ const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/api/v1";
 const ACCEPTED_TYPES = ".pdf,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg";
 
 export default function ChatInput() {
-  const { activeThreadId } = useWorkspaceStore();
+  const { activeThreadId, selectedStepId, setSelectedStepId } = useWorkspaceStore();
+  const { inspectorSteps } = useExecutionStore();
   const { addLocalMessage } = useThreadStore();
   const {
     isStreaming,
@@ -60,6 +61,21 @@ export default function ChatInput() {
       }
       setFiles([]);
 
+      // Build metadata with inspector context if a step is selected
+      const selectedStep = selectedStepId
+        ? inspectorSteps.find((s) => s.id === selectedStepId)
+        : null;
+      const metadata: Record<string, unknown> | undefined = selectedStep
+        ? {
+            inspector_context: {
+              step_id: selectedStep.id,
+              step_number: selectedStep.step_number,
+              node_name: selectedStep.node_name,
+              node_type: selectedStep.node_type,
+            },
+          }
+        : undefined;
+
       // Create user message via API
       const userMsg = await apiPost<ThreadMessage>(
         `/threads/${activeThreadId}/messages`,
@@ -68,8 +84,12 @@ export default function ChatInput() {
           role: "user",
           content: messageText,
           message_type: "text",
+          metadata,
         }
       );
+
+      // Clear inspector selection after sending
+      if (selectedStepId) setSelectedStepId(null);
 
       // Add user message to local list
       addLocalMessage(userMsg);
@@ -288,8 +308,32 @@ export default function ChatInput() {
     setFiles((prev) => prev.filter((_, i) => i !== idx));
   }
 
+  // Resolve selected step for the indicator
+  const contextStep = selectedStepId
+    ? inspectorSteps.find((s) => s.id === selectedStepId)
+    : null;
+
   return (
     <div className="border-t bg-white px-4 py-3">
+      {/* Inspector context indicator */}
+      {contextStep && (
+        <div className="mb-2 flex items-center gap-1.5 rounded-md bg-blue-50 px-2 py-1">
+          <Crosshair className="size-3 text-blue-500" />
+          <span className="text-[10px] text-blue-600">
+            Asking about:{" "}
+            <strong>
+              Step {contextStep.step_number} — {contextStep.node_name}
+            </strong>
+          </span>
+          <button
+            onClick={() => setSelectedStepId(null)}
+            className="ml-auto text-blue-400 hover:text-blue-600"
+          >
+            <X className="size-3" />
+          </button>
+        </div>
+      )}
+
       {/* File chips */}
       {files.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1.5">

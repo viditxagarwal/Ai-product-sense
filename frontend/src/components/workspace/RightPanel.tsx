@@ -6,6 +6,7 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 import { apiGet } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import ArtifactViewer from "./ArtifactViewer";
+import ExecutionInspector from "./ExecutionInspector";
 import type { FileChange } from "@/types";
 
 const TABS = [
@@ -60,15 +61,7 @@ export default function RightPanel() {
       <div className="flex-1 overflow-hidden">
         {activeRightTab === "artifacts" && <ArtifactViewer />}
 
-        {activeRightTab === "inspector" && (
-          <div className="flex h-full flex-col items-center justify-center p-4 text-center">
-            <Search className="size-8 text-slate-300" />
-            <p className="mt-2 text-sm text-slate-400">Execution Inspector</p>
-            <p className="mt-1 text-xs text-slate-300">
-              Click &quot;Inspect&quot; on a trace card to view execution details
-            </p>
-          </div>
-        )}
+        {activeRightTab === "inspector" && <ExecutionInspector />}
 
         {activeRightTab === "changes" && (
           <div className="flex h-full flex-col items-center justify-center p-4 text-center">
