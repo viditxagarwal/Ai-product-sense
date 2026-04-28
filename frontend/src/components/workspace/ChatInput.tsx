@@ -37,9 +37,75 @@ export default function ChatInput() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastStepIdRef = useRef<string | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const pendingMessageRef = useRef<string | null>(null);
 
   const canSend =
     text.trim().length > 0 && !isStreaming && !sending && activeThreadId;
+
+  // Connect to WebSocket and send start_run. Used by both initial send and reconnect.
+  const connectWs = useCallback(
+    (messageText: string) => {
+      if (!activeThreadId) return;
+
+      const token = document.cookie
+        .split("; ")
+        .find((c) => c.startsWith("sb-access-token="))
+        ?.split("=")[1];
+
+      const wsUrl = `${WS_BASE}/threads/${activeThreadId}/stream${
+        token ? `?token=${token}` : ""
+      }`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        clearActiveRun();
+        setStreaming(true);
+        setWsDisconnected(false);
+        reconnectAttemptRef.current = 0;
+        ws.send(JSON.stringify({ type: "start_run", message: messageText }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleWsEvent(data);
+        } catch {
+          // ignore malformed messages
+        }
+      };
+
+      ws.onclose = (event) => {
+        wsRef.current = null;
+        // Only show disconnection if we were still streaming (unexpected close)
+        if (isStreaming && event.code !== 1000) {
+          setWsDisconnected(true);
+          const attempt = reconnectAttemptRef.current;
+          if (attempt < 5) {
+            const delay = Math.min(1000 * Math.pow(2, attempt), 16000);
+            reconnectAttemptRef.current = attempt + 1;
+            setTimeout(() => {
+              // Reconnect WS only — do NOT re-create user message or trace
+              const msg = pendingMessageRef.current;
+              if (msg) connectWs(msg);
+            }, delay);
+          } else {
+            setStreaming(false);
+            pendingMessageRef.current = null;
+          }
+        } else {
+          setStreaming(false);
+          pendingMessageRef.current = null;
+        }
+      };
+
+      ws.onerror = () => {
+        // onclose will fire after onerror
+      };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeThreadId, isStreaming]
+  );
 
   const handleSend = useCallback(async () => {
     if (!canSend || !activeThreadId) return;
@@ -107,67 +173,16 @@ export default function ChatInput() {
       };
       addLocalMessage(tracePlaceholder);
 
-      // Connect to WebSocket for execution streaming
-      const token = document.cookie
-        .split("; ")
-        .find((c) => c.startsWith("sb-access-token="))
-        ?.split("=")[1];
-
-      const wsUrl = `${WS_BASE}/threads/${activeThreadId}/stream${
-        token ? `?token=${token}` : ""
-      }`;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        clearActiveRun();
-        setStreaming(true);
-        setWsDisconnected(false);
-        reconnectAttemptRef.current = 0;
-        ws.send(JSON.stringify({ type: "start_run", message: messageText }));
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          handleWsEvent(data);
-        } catch {
-          // ignore malformed messages
-        }
-      };
-
-      ws.onclose = (event) => {
-        wsRef.current = null;
-        // Only show disconnection if we were still streaming (unexpected close)
-        if (isStreaming && event.code !== 1000) {
-          setWsDisconnected(true);
-          // Exponential backoff reconnection
-          const attempt = reconnectAttemptRef.current;
-          if (attempt < 5) {
-            const delay = Math.min(1000 * Math.pow(2, attempt), 16000);
-            reconnectAttemptRef.current = attempt + 1;
-            setTimeout(() => {
-              // Try to reconnect by re-sending
-              handleSend();
-            }, delay);
-          } else {
-            setStreaming(false);
-          }
-        } else {
-          setStreaming(false);
-        }
-      };
-
-      ws.onerror = () => {
-        // onclose will fire after onerror
-      };
+      // Store message for potential reconnection, then connect WS
+      pendingMessageRef.current = messageText;
+      connectWs(messageText);
     } catch {
       // Toast handled by api client
     } finally {
       setSending(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canSend, activeThreadId, text, files]);
+  }, [canSend, activeThreadId, text, files, connectWs]);
 
   function handleWsEvent(data: Record<string, unknown>) {
     const type = data.type as string;

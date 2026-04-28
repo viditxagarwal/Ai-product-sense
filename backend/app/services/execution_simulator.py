@@ -249,18 +249,60 @@ def _detect_user_intent(message: str) -> str:
     return "query"
 
 
-def _extract_wacc_value(message: str) -> float | None:
-    """Try to extract a WACC percentage from the message."""
-    match = re.search(r'wacc\s*(?:to|=|:)?\s*(\d+\.?\d*)\s*%?', message, re.IGNORECASE)
-    if match:
-        return float(match.group(1))
-    # Also try generic percentage patterns
-    match = re.search(r'(\d+\.?\d*)\s*%', message)
-    if match:
-        val = float(match.group(1))
-        if 3 <= val <= 30:  # Reasonable WACC range
-            return val
-    return None
+def _extract_param_changes(message: str) -> dict[str, float]:
+    """Extract parameter changes from user message. Returns dict of param_name -> new_value."""
+    lower = message.lower()
+    changes: dict[str, float] = {}
+
+    # WACC
+    m = re.search(r'wacc\s*(?:to|=|:)?\s*(\d+\.?\d*)\s*%?', lower)
+    if m:
+        changes["wacc"] = float(m.group(1))
+        changes["discount_rate"] = float(m.group(1))  # WACC = discount rate
+
+    # Terminal growth rate
+    m = re.search(r'terminal\s+growth\s*(?:rate)?\s*(?:to|=|:)?\s*(\d+\.?\d*)\s*%?', lower)
+    if m:
+        changes["terminal_growth"] = float(m.group(1))
+
+    # Revenue growth
+    m = re.search(r'revenue\s+growth\s*(?:rate)?\s*(?:to|=|:)?\s*(\d+\.?\d*)\s*%?', lower)
+    if m:
+        changes["revenue_growth"] = float(m.group(1))
+
+    # EBITDA margin
+    m = re.search(r'ebitda\s+margin\s*(?:to|=|:)?\s*(\d+\.?\d*)\s*%?', lower)
+    if m:
+        changes["ebitda_margin"] = float(m.group(1))
+
+    # Tax rate
+    m = re.search(r'tax\s+rate\s*(?:to|=|:)?\s*(\d+\.?\d*)\s*%?', lower)
+    if m:
+        changes["tax_rate"] = float(m.group(1))
+
+    # CapEx
+    m = re.search(r'capex\s*(?:to|=|:)?\s*(\d+\.?\d*)\s*%?', lower)
+    if m:
+        changes["capex_pct"] = float(m.group(1))
+
+    # Fallback: if "change" detected but no specific param, try generic percentage
+    if not changes:
+        m = re.search(r'(\d+\.?\d*)\s*%', message)
+        if m:
+            val = float(m.group(1))
+            # Try to guess what parameter from context
+            if "growth" in lower:
+                if "terminal" in lower:
+                    changes["terminal_growth"] = val
+                else:
+                    changes["revenue_growth"] = val
+            elif "margin" in lower:
+                changes["ebitda_margin"] = val
+            elif "discount" in lower or "wacc" in lower:
+                changes["wacc"] = val
+                changes["discount_rate"] = val
+
+    return changes
 
 
 def _get_existing_files(thread_id: str) -> list[dict]:
@@ -286,35 +328,47 @@ def _modify_excel_cells(thread_id: str, file_record: dict, step_id: str,
     latest_version = _get_latest_version(file_id)
     new_version_num = (latest_version["version_number"] + 1) if latest_version else 2
 
-    # Determine what to change
-    new_wacc = _extract_wacc_value(user_message)
+    # Determine what to change using the generic parameter extractor
+    param_changes = _extract_param_changes(user_message)
     changes_to_make = []
 
-    if new_wacc is not None:
+    # Map of param_name -> (sheet!cell, row_in_assumptions, summary_row)
+    PARAM_CELL_MAP = {
+        "wacc": ("Assumptions!B2", "WACC (%)", "Summary!B2"),
+        "terminal_growth": ("Assumptions!B3", "Terminal Growth Rate (%)", "Summary!B3"),
+        "revenue_growth": ("Assumptions!B5", "Revenue Growth (%)", "Summary!B4"),
+        "ebitda_margin": ("Assumptions!B6", "EBITDA Margin (%)", None),
+        "capex_pct": ("Assumptions!B7", "CapEx (% of Revenue)", None),
+        "tax_rate": ("Assumptions!B8", "Tax Rate (%)", None),
+        "discount_rate": ("Assumptions!B9", "Discount Rate (%)", None),
+    }
+
+    for param, new_val in param_changes.items():
+        cell_info = PARAM_CELL_MAP.get(param)
+        if not cell_info:
+            continue
+        location, label, summary_cell = cell_info
+        old_val = DCF_DEFAULTS.get(param, 0)
+
         changes_to_make.append({
-            "location": "Assumptions!B2",
-            "old_value": str(DCF_DEFAULTS["wacc"]),
-            "new_value": str(new_wacc),
-            "reason": f"User requested WACC adjustment to {new_wacc}%",
+            "location": location,
+            "old_value": str(old_val),
+            "new_value": str(new_val),
+            "reason": f"User requested {label} adjustment to {new_val}%",
             "downstream_impact": {"affected_cells_count": 6, "affected_sheets": ["DCF", "Summary"]},
         })
-        # Downstream: discount rate also changes
-        changes_to_make.append({
-            "location": "Assumptions!B9",
-            "old_value": str(DCF_DEFAULTS["discount_rate"]),
-            "new_value": str(new_wacc),
-            "reason": "Discount rate updated to match new WACC",
-            "downstream_impact": {"affected_cells_count": 5, "affected_sheets": ["DCF"]},
-        })
-        # Summary WACC cell
-        changes_to_make.append({
-            "location": "Summary!B2",
-            "old_value": f"{DCF_DEFAULTS['wacc']}%",
-            "new_value": f"{new_wacc}%",
-            "reason": "Summary updated to reflect new WACC",
-            "downstream_impact": None,
-        })
-    else:
+
+        # Add downstream summary cell update if applicable
+        if summary_cell:
+            changes_to_make.append({
+                "location": summary_cell,
+                "old_value": f"{old_val}%",
+                "new_value": f"{new_val}%",
+                "reason": f"Summary updated to reflect new {label.split('(')[0].strip()}",
+                "downstream_impact": None,
+            })
+
+    if not changes_to_make:
         # Random modifications if no specific value detected
         random_changes = [
             {
@@ -334,29 +388,9 @@ def _modify_excel_cells(thread_id: str, file_record: dict, step_id: str,
         ]
         changes_to_make = random.sample(random_changes, k=random.randint(1, 2))
 
-    # Re-create the Excel file with new params (simplified: use defaults + overrides)
+    # Re-create the Excel file with new params
     params = dict(DCF_DEFAULTS)
-    for ch in changes_to_make:
-        if "WACC" in ch["location"] or "B2" in ch["location"]:
-            try:
-                params["wacc"] = float(ch["new_value"])
-            except ValueError:
-                pass
-        if "B9" in ch["location"]:
-            try:
-                params["discount_rate"] = float(ch["new_value"])
-            except ValueError:
-                pass
-        if "B5" in ch["location"]:
-            try:
-                params["revenue_growth"] = float(ch["new_value"])
-            except ValueError:
-                pass
-        if "B6" in ch["location"]:
-            try:
-                params["ebitda_margin"] = float(ch["new_value"])
-            except ValueError:
-                pass
+    params.update(param_changes)
 
     excel_bytes = _create_dcf_excel(params)
     file_name = file_record["file_name"]
@@ -673,19 +707,9 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
         "thread_id": thread_id,
     }
 
-    # Create user message
-    user_msg = supabase.table("thread_messages").insert({
-        "thread_id": thread_id,
-        "role": "user",
-        "content": user_message,
-        "message_type": "text",
-    }).execute()
-    user_msg_id = user_msg.data[0]["id"]
-
-    # Create execution run
+    # Create execution run (user message already created by frontend via REST API)
     run = supabase.table("execution_runs").insert({
         "thread_id": thread_id,
-        "trigger_message_id": user_msg_id,
         "status": "running",
     }).execute()
     run_id = run.data[0]["id"]
