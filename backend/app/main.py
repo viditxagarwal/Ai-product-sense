@@ -8,9 +8,12 @@ from app.routers import (
     auth,
     configurations,
     domains,
+    executions,
+    file_changes,
     guardrails,
     knowledge,
     prompts,
+    threads,
     tools,
     workflows,
 )
@@ -38,6 +41,9 @@ app.include_router(knowledge.router, prefix=API_PREFIX)
 app.include_router(prompts.router, prefix=API_PREFIX)
 app.include_router(guardrails.router, prefix=API_PREFIX)
 app.include_router(configurations.router, prefix=API_PREFIX)
+app.include_router(threads.router, prefix=API_PREFIX)
+app.include_router(executions.router, prefix=API_PREFIX)
+app.include_router(file_changes.router, prefix=API_PREFIX)
 
 
 @app.get("/health")
