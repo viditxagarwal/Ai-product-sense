@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Cpu, Shield, BookOpen } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { apiGet } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import type { ConfigurationResponse } from "@/types";
 
 interface ConfigBarProps {

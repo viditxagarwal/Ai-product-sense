@@ -28,7 +28,7 @@ const STATUS_STYLES: Record<
 
 export default function ChangeCard({ change, onUpdate }: ChangeCardProps) {
   const [resolving, setResolving] = useState<"accept" | "reject" | null>(null);
-  const { activeThreadId, setActiveRightTab } = useWorkspaceStore();
+  const { activeThreadId } = useWorkspaceStore();
   const { addLocalMessage } = useThreadStore();
 
   const style = STATUS_STYLES[change.status];

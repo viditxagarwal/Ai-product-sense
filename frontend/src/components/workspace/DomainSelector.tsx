@@ -21,8 +21,6 @@ export default function DomainSelector() {
     }
   }, [domains, activeDomainId, setActiveDomainId]);
 
-  const activeDomain = domains.find((d) => d.id === activeDomainId);
-
   return (
     <div className="relative">
       <select

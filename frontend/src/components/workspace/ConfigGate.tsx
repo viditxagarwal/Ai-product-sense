@@ -7,7 +7,6 @@ import {
   Settings,
   FileUp,
   X,
-  Star,
   Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -135,9 +134,6 @@ export default function ConfigGate() {
     e.preventDefault();
     e.stopPropagation();
   }, []);
-
-  const selectedWf = workflows.find((w) => w.id === workflowId);
-  const selectedCfg = configs.find((c) => c.id === configId);
 
   return (
     <div className="flex h-full items-start justify-center overflow-y-auto py-12">

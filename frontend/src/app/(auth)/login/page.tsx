@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Cpu } from "lucide-react";
@@ -17,7 +17,7 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 
-export default function LoginPage() {
+function LoginForm() {
   const { signIn } = useAuth();
   const searchParams = useSearchParams();
   const redirect = searchParams.get("redirect") || undefined;
@@ -93,5 +93,13 @@ export default function LoginPage() {
         </CardFooter>
       </form>
     </Card>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
   );
 }

@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { MessageCircle, ChevronRight, WifiOff } from "lucide-react";
+import { MessageCircle, ChevronRight } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useThreadStore } from "@/stores/thread-store";
-import { useExecutionStore } from "@/stores/execution-store";
 import { useDomainStore } from "@/stores/domain-store";
 import ConfigGate from "./ConfigGate";
 import ConfigBar from "./ConfigBar";
@@ -16,7 +15,6 @@ export default function CenterPanel() {
   const { isConfigGateOpen, activeThreadId, activeDomainId } = useWorkspaceStore();
   const { activeThread, messages, messagesLoading, fetchThread, fetchMessages } =
     useThreadStore();
-  const { isStreaming } = useExecutionStore();
   const { domains } = useDomainStore();
   const bottomRef = useRef<HTMLDivElement>(null);
 
