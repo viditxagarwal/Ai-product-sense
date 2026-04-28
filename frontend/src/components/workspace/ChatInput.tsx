@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { Send, Paperclip, Loader2, X, Crosshair } from "lucide-react";
+import { Send, Paperclip, Loader2, X, Crosshair, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiPost } from "@/lib/api";
 import { useThreadStore } from "@/stores/thread-store";
@@ -32,10 +32,11 @@ export default function ChatInput() {
   const [text, setText] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
+  const [wsDisconnected, setWsDisconnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Track the latest step_id for associating file events
   const lastStepIdRef = useRef<string | null>(null);
+  const reconnectAttemptRef = useRef(0);
 
   const canSend =
     text.trim().length > 0 && !isStreaming && !sending && activeThreadId;
@@ -121,6 +122,8 @@ export default function ChatInput() {
       ws.onopen = () => {
         clearActiveRun();
         setStreaming(true);
+        setWsDisconnected(false);
+        reconnectAttemptRef.current = 0;
         ws.send(JSON.stringify({ type: "start_run", message: messageText }));
       };
 
@@ -133,14 +136,30 @@ export default function ChatInput() {
         }
       };
 
-      ws.onclose = () => {
-        setStreaming(false);
+      ws.onclose = (event) => {
         wsRef.current = null;
+        // Only show disconnection if we were still streaming (unexpected close)
+        if (isStreaming && event.code !== 1000) {
+          setWsDisconnected(true);
+          // Exponential backoff reconnection
+          const attempt = reconnectAttemptRef.current;
+          if (attempt < 5) {
+            const delay = Math.min(1000 * Math.pow(2, attempt), 16000);
+            reconnectAttemptRef.current = attempt + 1;
+            setTimeout(() => {
+              // Try to reconnect by re-sending
+              handleSend();
+            }, delay);
+          } else {
+            setStreaming(false);
+          }
+        } else {
+          setStreaming(false);
+        }
       };
 
       ws.onerror = () => {
-        setStreaming(false);
-        wsRef.current = null;
+        // onclose will fire after onerror
       };
     } catch {
       // Toast handled by api client
@@ -315,6 +334,17 @@ export default function ChatInput() {
 
   return (
     <div className="border-t bg-white px-4 py-3">
+      {/* WebSocket disconnection banner */}
+      {wsDisconnected && (
+        <div className="mb-2 flex items-center gap-1.5 rounded-md bg-red-50 px-2 py-1.5">
+          <WifiOff className="size-3 text-red-500" />
+          <span className="text-[10px] text-red-600">
+            Connection lost. Reconnecting...
+          </span>
+          <Loader2 className="ml-auto size-3 animate-spin text-red-400" />
+        </div>
+      )}
+
       {/* Inspector context indicator */}
       {contextStep && (
         <div className="mb-2 flex items-center gap-1.5 rounded-md bg-blue-50 px-2 py-1">
@@ -378,13 +408,14 @@ export default function ChatInput() {
 
         {/* Text area */}
         <textarea
+          data-chat-input
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={
             isStreaming
               ? "Waiting for execution to complete..."
-              : "Type a message..."
+              : "Type a message... (⌘K to focus)"
           }
           disabled={isStreaming}
           rows={1}
