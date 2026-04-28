@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pydantic>=2.0
+supabase
+python-dotenv
+python-multipart
+PyJWT[crypto]>=2.0
+slowapi>=0.1.9
+
