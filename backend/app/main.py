@@ -13,6 +13,7 @@ from app.routers import (
     guardrails,
     knowledge,
     prompts,
+    stream,
     threads,
     tools,
     workflows,
@@ -44,6 +45,7 @@ app.include_router(configurations.router, prefix=API_PREFIX)
 app.include_router(threads.router, prefix=API_PREFIX)
 app.include_router(executions.router, prefix=API_PREFIX)
 app.include_router(file_changes.router, prefix=API_PREFIX)
+app.include_router(stream.router, prefix=API_PREFIX)
 
 
 @app.get("/health")
