@@ -323,3 +323,133 @@ export interface ConfigurationCreate {
   // All other fields are optional — server provides defaults
   [key: string]: unknown;
 }
+
+// ─── Phase 2: Threads ─────────────────────────────────────
+
+export interface Thread {
+  id: string;
+  domain_id: string;
+  workflow_id: string;
+  configuration_id: string;
+  user_id: string;
+  title: string;
+  instructions: string;
+  status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+  message_count?: number;
+}
+
+export interface ThreadCreate {
+  domain_id: string;
+  workflow_id: string;
+  configuration_id: string;
+  title?: string;
+  instructions?: string;
+}
+
+export interface ThreadMessage {
+  id: string;
+  thread_id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  message_type: "text" | "execution_trace" | "file_attachment";
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface ThreadMessageCreate {
+  thread_id: string;
+  role: "user" | "assistant" | "system";
+  content?: string;
+  message_type?: "text" | "execution_trace" | "file_attachment";
+  metadata?: Record<string, unknown>;
+}
+
+// ─── Phase 2: Execution ───────────────────────────────────
+
+export interface ExecutionRun {
+  id: string;
+  thread_id: string;
+  trigger_message_id: string | null;
+  status: "running" | "completed" | "failed" | "cancelled";
+  total_duration_ms: number | null;
+  total_tokens: number;
+  total_cost_usd: number;
+  step_count: number;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export type FileOperationType = "creation" | "targeted_edit" | "append" | "bulk_rewrite" | "none";
+
+export interface ExecutionStep {
+  id: string;
+  run_id: string;
+  step_number: number;
+  node_type: string;
+  node_name: string;
+  status: "pending" | "running" | "completed" | "failed" | "skipped";
+  duration_ms: number | null;
+  tokens_used: number;
+  cost_usd: number;
+  tool_name: string | null;
+  tool_config: Record<string, unknown> | null;
+  input_payload: Record<string, unknown> | null;
+  output_payload: Record<string, unknown> | null;
+  routing_decision: Record<string, unknown> | null;
+  guardrails_fired: unknown[] | null;
+  file_operation_type: FileOperationType;
+  confidence_score: number | null;
+  created_at: string;
+}
+
+// ─── Phase 2: Files ───────────────────────────────────────
+
+export interface ThreadFile {
+  id: string;
+  thread_id: string;
+  file_name: string;
+  file_url: string;
+  file_type: string;
+  file_size_bytes: number | null;
+  source: "user_upload" | "ai_generated";
+  current_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FileVersion {
+  id: string;
+  file_id: string;
+  version_number: number;
+  file_url: string;
+  operation_type: "creation" | "targeted_edit" | "append" | "bulk_rewrite";
+  change_summary: Record<string, unknown> | null;
+  created_by: "user" | "ai";
+  trigger_step_id: string | null;
+  created_at: string;
+}
+
+export interface FileChange {
+  id: string;
+  file_version_id: string;
+  change_type: "cell_modify" | "line_modify";
+  location: string;
+  old_value: string;
+  new_value: string;
+  reason: string | null;
+  downstream_impact: Record<string, unknown> | null;
+  status: "pending" | "accepted" | "rejected" | "reverted";
+  resolved_at: string | null;
+}
+
+// ─── Phase 2: Annotations ─────────────────────────────────
+
+export interface PMAnnotation {
+  id: string;
+  step_id: string;
+  user_id: string;
+  annotation_text: string;
+  created_at: string;
+}

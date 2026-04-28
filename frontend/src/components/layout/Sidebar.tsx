@@ -11,6 +11,7 @@ import {
   PenTool,
   Shield,
   Settings,
+  MessageSquare,
   ChevronLeft,
   ChevronRight,
   Cpu,
@@ -27,6 +28,7 @@ import { apiGet } from "@/lib/api";
 import type { PaginatedResponse } from "@/types";
 
 const NAV_ITEMS = [
+  { href: "/workspace", label: "Workspace", icon: MessageSquare, countKey: null },
   { href: "/domains", label: "Domains", icon: Globe, countKey: "domains" },
   { href: "/workflows", label: "Workflows", icon: GitBranch, countKey: "workflows" },
   { href: "/tools", label: "Tools", icon: Wrench, countKey: "tools" },
