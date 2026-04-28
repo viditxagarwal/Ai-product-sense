@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 type RightPanelTab = "artifacts" | "inspector" | "changes";
+type LeftPanelTab = "threads" | "files";
 
 interface WorkspaceStore {
   // Panel visibility
@@ -8,6 +9,16 @@ interface WorkspaceStore {
   rightPanelOpen: boolean;
   toggleLeftPanel: () => void;
   toggleRightPanel: () => void;
+
+  // Left panel
+  leftTab: LeftPanelTab;
+  setLeftTab: (tab: LeftPanelTab) => void;
+  activeDomainId: string | null;
+  setActiveDomainId: (id: string | null) => void;
+
+  // Config gate (new thread creation)
+  isConfigGateOpen: boolean;
+  setConfigGateOpen: (open: boolean) => void;
 
   // Active selections
   activeThreadId: string | null;
@@ -32,8 +43,16 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   toggleLeftPanel: () => set((s) => ({ leftPanelOpen: !s.leftPanelOpen })),
   toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
 
+  leftTab: "threads",
+  setLeftTab: (tab) => set({ leftTab: tab }),
+  activeDomainId: null,
+  setActiveDomainId: (id) => set({ activeDomainId: id }),
+
+  isConfigGateOpen: false,
+  setConfigGateOpen: (open) => set({ isConfigGateOpen: open }),
+
   activeThreadId: null,
-  setActiveThreadId: (id) => set({ activeThreadId: id }),
+  setActiveThreadId: (id) => set({ activeThreadId: id, isConfigGateOpen: false }),
 
   activeRightTab: "artifacts",
   setActiveRightTab: (tab) => set({ activeRightTab: tab }),
