@@ -34,7 +34,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
   if (message.message_type === "execution_trace") {
     return (
       <div className="px-4 py-1">
-        <ExecutionTraceCard runId={message.metadata?.run_id as string | undefined} />
+        <ExecutionTraceCard />
       </div>
     );
   }

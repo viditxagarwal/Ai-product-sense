@@ -8,7 +8,7 @@ import { useThreadStore } from "@/stores/thread-store";
 import { useExecutionStore } from "@/stores/execution-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { cn } from "@/lib/utils";
-import type { ThreadMessage, ThreadFile } from "@/types";
+import type { ThreadMessage, ThreadFile, ExecutionStep } from "@/types";
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/api/v1";
 const ACCEPTED_TYPES = ".pdf,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg";
@@ -22,6 +22,9 @@ export default function ChatInput() {
     setActiveRun,
     addStep,
     updateStep,
+    appendStepProgress,
+    setStepFileEvent,
+    setRunError,
     clearActiveRun,
   } = useExecutionStore();
 
@@ -30,8 +33,11 @@ export default function ChatInput() {
   const [sending, setSending] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Track the latest step_id for associating file events
+  const lastStepIdRef = useRef<string | null>(null);
 
-  const canSend = text.trim().length > 0 && !isStreaming && !sending && activeThreadId;
+  const canSend =
+    text.trim().length > 0 && !isStreaming && !sending && activeThreadId;
 
   const handleSend = useCallback(async () => {
     if (!canSend || !activeThreadId) return;
@@ -65,7 +71,7 @@ export default function ChatInput() {
         }
       );
 
-      // Add to local list optimistically
+      // Add user message to local list
       addLocalMessage(userMsg);
 
       // Add a placeholder execution trace message
@@ -86,13 +92,15 @@ export default function ChatInput() {
         .find((c) => c.startsWith("sb-access-token="))
         ?.split("=")[1];
 
-      const wsUrl = `${WS_BASE}/threads/${activeThreadId}/stream${token ? `?token=${token}` : ""}`;
+      const wsUrl = `${WS_BASE}/threads/${activeThreadId}/stream${
+        token ? `?token=${token}` : ""
+      }`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        setStreaming(true);
         clearActiveRun();
+        setStreaming(true);
         ws.send(JSON.stringify({ type: "start_run", message: messageText }));
       };
 
@@ -119,46 +127,153 @@ export default function ChatInput() {
     } finally {
       setSending(false);
     }
-  }, [canSend, activeThreadId, text, files, addLocalMessage, setStreaming, clearActiveRun]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSend, activeThreadId, text, files]);
 
   function handleWsEvent(data: Record<string, unknown>) {
     const type = data.type as string;
 
     switch (type) {
-      case "run_started":
-        if (data.run) setActiveRun(data.run as Parameters<typeof setActiveRun>[0]);
+      // ── Run lifecycle ────────────────────────────────
+      case "run_started": {
+        setActiveRun({
+          id: data.run_id as string,
+          status: "running",
+          step_count: (data.step_count as number) || 0,
+        });
         break;
-      case "step_started":
-      case "step_completed":
-      case "step_failed":
-        if (data.step) {
-          const step = data.step as Parameters<typeof addStep>[0];
-          if (type === "step_started") {
-            addStep(step);
-          } else {
-            updateStep(step.id, step);
-          }
+      }
+
+      // ── Step lifecycle ───────────────────────────────
+      case "step_started": {
+        const stepId = data.step_id as string;
+        lastStepIdRef.current = stepId;
+
+        const step: ExecutionStep = {
+          id: stepId,
+          run_id: (data.run_id as string) || "",
+          step_number: data.step_number as number,
+          node_type: data.node_type as string,
+          node_name: data.node_name as string,
+          status: "running",
+          duration_ms: null,
+          tokens_used: 0,
+          cost_usd: 0,
+          tool_name: (data.tool_name as string) || null,
+          tool_config: null,
+          input_payload: null,
+          output_payload: null,
+          routing_decision: null,
+          guardrails_fired: null,
+          file_operation_type: "none",
+          confidence_score: null,
+          created_at: new Date().toISOString(),
+        };
+        addStep(step);
+        break;
+      }
+
+      case "step_progress": {
+        const stepId = data.step_id as string;
+        const content = data.content as string;
+        if (stepId && content) {
+          appendStepProgress(stepId, content);
         }
         break;
-      case "run_completed":
-      case "run_failed":
-        if (data.run) setActiveRun(data.run as Parameters<typeof setActiveRun>[0]);
+      }
+
+      case "step_completed": {
+        const stepId = data.step_id as string;
+        updateStep(stepId, {
+          status: "completed",
+          duration_ms: (data.duration_ms as number) || null,
+          output_payload: { result_summary: data.result_summary as string },
+          file_operation_type:
+            (data.file_operation_type as ExecutionStep["file_operation_type"]) || "none",
+        });
+        break;
+      }
+
+      case "step_failed": {
+        const stepId = data.step_id as string;
+        updateStep(stepId, { status: "failed" });
+        break;
+      }
+
+      // ── File events ──────────────────────────────────
+      case "file_created": {
+        const associatedStep = lastStepIdRef.current;
+        if (associatedStep) {
+          setStepFileEvent(associatedStep, {
+            file_id: data.file_id as string,
+            file_name: data.file_name as string,
+            file_type: data.file_type as string,
+            operation: "created",
+          });
+        }
+        break;
+      }
+
+      case "file_modified": {
+        const associatedStep = lastStepIdRef.current;
+        if (associatedStep) {
+          setStepFileEvent(associatedStep, {
+            file_id: data.file_id as string,
+            file_name: data.file_name as string,
+            file_type: (data.file_type as string) || "",
+            operation: "modified",
+          });
+        }
+        break;
+      }
+
+      // ── Run completion ───────────────────────────────
+      case "run_completed": {
+        setActiveRun({
+          id: data.run_id as string,
+          status: "completed",
+          total_duration_ms: data.total_duration_ms as number,
+          total_tokens: data.total_tokens as number,
+          total_cost_usd: data.total_cost_usd as number,
+        });
         setStreaming(false);
-        // Add assistant summary message if provided
-        if (data.summary) {
-          const summaryMsg: ThreadMessage = {
-            id: `summary-${Date.now()}`,
-            thread_id: activeThreadId!,
-            role: "assistant",
-            content: data.summary as string,
-            message_type: "text",
-            metadata: null,
-            created_at: new Date().toISOString(),
-          };
-          addLocalMessage(summaryMsg);
-        }
+        break;
+      }
+
+      case "run_failed": {
+        setActiveRun({
+          id: (data.run_id as string) || "",
+          status: "failed",
+        });
+        setRunError((data.error as string) || "Execution failed");
+        setStreaming(false);
         wsRef.current?.close();
         break;
+      }
+
+      // ── Assistant message ────────────────────────────
+      case "assistant_message": {
+        const content = data.content as string;
+        if (content && activeThreadId) {
+          const msg: ThreadMessage = {
+            id: `assistant-${Date.now()}`,
+            thread_id: activeThreadId,
+            role: "assistant",
+            content,
+            message_type: "text",
+            metadata: data.files ? { files: data.files } : null,
+            created_at: new Date().toISOString(),
+          };
+          addLocalMessage(msg);
+        }
+        break;
+      }
+
+      // ── Error ────────────────────────────────────────
+      case "error": {
+        setRunError((data.message as string) || "Unknown error");
+        break;
+      }
     }
   }
 
@@ -211,7 +326,8 @@ export default function ChatInput() {
           multiple
           className="hidden"
           onChange={(e) => {
-            if (e.target.files) setFiles((prev) => [...prev, ...Array.from(e.target.files!)]);
+            if (e.target.files)
+              setFiles((prev) => [...prev, ...Array.from(e.target.files!)]);
             e.target.value = "";
           }}
         />
@@ -221,7 +337,11 @@ export default function ChatInput() {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={isStreaming ? "Waiting for execution to complete..." : "Type a message..."}
+          placeholder={
+            isStreaming
+              ? "Waiting for execution to complete..."
+              : "Type a message..."
+          }
           disabled={isStreaming}
           rows={1}
           className={cn(
