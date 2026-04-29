@@ -1,6 +1,5 @@
 import base64
 import hashlib
-import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -18,7 +17,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Encryption helpers
 # ---------------------------------------------------------------------------
-# Derive a Fernet key from ENCRYPTION_SECRET (or fallback to SUPABASE_SERVICE_ROLE_KEY).
 _raw_secret = os.environ.get(
     "ENCRYPTION_SECRET",
     os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "fallback-secret-change-me"),
@@ -55,7 +53,6 @@ def list_api_keys(user_id: UUID) -> list[dict]:
         .order("created_at")
         .execute()
     )
-    # Strip encrypted_key from response
     for row in resp.data:
         row.pop("encrypted_key", None)
     return resp.data
@@ -65,7 +62,6 @@ def upsert_api_key(user_id: UUID, data: ApiKeyCreate) -> dict:
     hint = _key_hint(data.api_key) if data.api_key else ""
     encrypted = _encrypt(data.api_key) if data.api_key else _encrypt("")
 
-    # Check if exists
     existing = (
         supabase.table("api_keys")
         .select("id")
@@ -79,7 +75,8 @@ def upsert_api_key(user_id: UUID, data: ApiKeyCreate) -> dict:
         "provider": data.provider,
         "encrypted_key": encrypted,
         "key_hint": hint,
-        "extra_fields": data.extra_fields,
+        "base_url": data.base_url,
+        "additional_config": data.additional_config,
         "is_valid": None,
         "last_tested_at": None,
     }
@@ -131,11 +128,11 @@ async def test_api_key(user_id: UUID, key_id: UUID) -> ApiKeyTestResult:
     row = resp.data
     provider = row["provider"]
     api_key = _decrypt(row["encrypted_key"])
-    extra = row.get("extra_fields", {}) or {}
+    base_url = row.get("base_url") or ""
+    additional_config = row.get("additional_config", {}) or {}
 
-    result = await _test_provider(provider, api_key, extra)
+    result = await _test_provider(provider, api_key, base_url, additional_config)
 
-    # Update validity
     supabase.table("api_keys").update({
         "is_valid": result.success,
         "last_tested_at": datetime.now(timezone.utc).isoformat(),
@@ -145,12 +142,12 @@ async def test_api_key(user_id: UUID, key_id: UUID) -> ApiKeyTestResult:
 
 
 async def _test_provider(
-    provider: str, api_key: str, extra: dict
+    provider: str, api_key: str, base_url: str, additional_config: dict
 ) -> ApiKeyTestResult:
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             if provider == "openai":
-                return await _test_openai(client, api_key, extra)
+                return await _test_openai(client, api_key, additional_config)
             elif provider == "anthropic":
                 return await _test_anthropic(client, api_key)
             elif provider == "groq":
@@ -158,14 +155,14 @@ async def _test_provider(
             elif provider == "google_ai":
                 return await _test_google_ai(client, api_key)
             elif provider == "ollama":
-                return await _test_ollama(client, extra)
+                return await _test_ollama(client, base_url)
             elif provider == "custom_openai":
-                return await _test_custom_openai(client, api_key, extra)
+                return await _test_custom_openai(client, api_key, base_url)
             elif provider == "tavily":
                 return await _test_tavily(client, api_key)
             elif provider in ("alpha_vantage", "polygon"):
                 return await _test_financial(client, provider, api_key)
-            elif provider in ("database_pg", "database_mysql"):
+            elif provider in ("database_postgres", "database_mysql"):
                 return ApiKeyTestResult(
                     success=True,
                     message="Database connection saved. Test from your workflow.",
@@ -179,10 +176,10 @@ async def _test_provider(
         return ApiKeyTestResult(success=False, message=str(e))
 
 
-async def _test_openai(client: httpx.AsyncClient, api_key: str, extra: dict) -> ApiKeyTestResult:
+async def _test_openai(client: httpx.AsyncClient, api_key: str, additional_config: dict) -> ApiKeyTestResult:
     headers = {"Authorization": f"Bearer {api_key}"}
-    if extra.get("organization_id"):
-        headers["OpenAI-Organization"] = extra["organization_id"]
+    if additional_config.get("organization_id"):
+        headers["OpenAI-Organization"] = additional_config["organization_id"]
     r = await client.get("https://api.openai.com/v1/models", headers=headers)
     if r.status_code == 200:
         models = [m["id"] for m in r.json().get("data", [])]
@@ -232,9 +229,9 @@ async def _test_google_ai(client: httpx.AsyncClient, api_key: str) -> ApiKeyTest
     return ApiKeyTestResult(success=False, message=f"Google AI returned {r.status_code}: {r.text[:200]}")
 
 
-async def _test_ollama(client: httpx.AsyncClient, extra: dict) -> ApiKeyTestResult:
-    base_url = extra.get("base_url", "http://localhost:11434").rstrip("/")
-    r = await client.get(f"{base_url}/api/tags")
+async def _test_ollama(client: httpx.AsyncClient, base_url: str) -> ApiKeyTestResult:
+    url = (base_url or "http://localhost:11434").rstrip("/")
+    r = await client.get(f"{url}/api/tags")
     if r.status_code == 200:
         models = [m["name"] for m in r.json().get("models", [])]
         return ApiKeyTestResult(
@@ -245,14 +242,14 @@ async def _test_ollama(client: httpx.AsyncClient, extra: dict) -> ApiKeyTestResu
     return ApiKeyTestResult(success=False, message=f"Ollama returned {r.status_code}")
 
 
-async def _test_custom_openai(client: httpx.AsyncClient, api_key: str, extra: dict) -> ApiKeyTestResult:
-    base_url = extra.get("base_url", "").rstrip("/")
-    if not base_url:
+async def _test_custom_openai(client: httpx.AsyncClient, api_key: str, base_url: str) -> ApiKeyTestResult:
+    url = (base_url or "").rstrip("/")
+    if not url:
         return ApiKeyTestResult(success=False, message="Base URL is required")
     headers: dict[str, str] = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    r = await client.get(f"{base_url}/v1/models", headers=headers)
+    r = await client.get(f"{url}/v1/models", headers=headers)
     if r.status_code == 200:
         models = [m["id"] for m in r.json().get("data", [])]
         return ApiKeyTestResult(success=True, message="Connected to custom endpoint", models=models[:20])
@@ -291,13 +288,12 @@ async def _test_financial(client: httpx.AsyncClient, provider: str, api_key: str
 # Available models (grouped by provider)
 # ---------------------------------------------------------------------------
 
-# Static model lists per provider
 PROVIDER_MODELS: dict[str, list[str]] = {
     "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o1", "o1-mini"],
     "anthropic": ["claude-opus-4", "claude-sonnet-4", "claude-haiku-3.5"],
     "groq": ["llama-3.3-70b", "llama-3.1-8b", "mixtral-8x7b", "gemma2-9b"],
     "google_ai": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
-    "custom_openai": [],  # dynamic
+    "custom_openai": [],
 }
 
 PROVIDER_DISPLAY: dict[str, str] = {
@@ -313,7 +309,7 @@ PROVIDER_DISPLAY: dict[str, str] = {
 async def get_available_models(user_id: UUID) -> list[dict]:
     resp = (
         supabase.table("api_keys")
-        .select("provider, extra_fields, is_valid, encrypted_key")
+        .select("provider, base_url, additional_config, is_valid, encrypted_key")
         .eq("user_id", str(user_id))
         .execute()
     )
@@ -327,19 +323,18 @@ async def get_available_models(user_id: UUID) -> list[dict]:
 
         # For Ollama, try to fetch real models
         if provider == "ollama" and connected:
-            extra = row.get("extra_fields", {}) or {}
-            base_url = extra.get("base_url", "http://localhost:11434").rstrip("/")
+            url = (row.get("base_url") or "http://localhost:11434").rstrip("/")
             try:
                 async with httpx.AsyncClient(timeout=5) as client:
-                    r = await client.get(f"{base_url}/api/tags")
+                    r = await client.get(f"{url}/api/tags")
                     if r.status_code == 200:
                         models = [m["name"] for m in r.json().get("models", [])]
             except Exception:
                 models = ["(could not reach Ollama)"]
 
-        # For custom_openai, show the model_name from extra_fields
+        # For custom_openai, show the model_name from additional_config
         if provider == "custom_openai" and connected:
-            extra = row.get("extra_fields", {}) or {}
+            extra = row.get("additional_config", {}) or {}
             model_name = extra.get("model_name", "")
             if model_name:
                 models = [model_name]

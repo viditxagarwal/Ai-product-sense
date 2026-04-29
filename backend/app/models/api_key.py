@@ -15,7 +15,7 @@ Provider = Literal[
     "tavily",
     "alpha_vantage",
     "polygon",
-    "database_pg",
+    "database_postgres",
     "database_mysql",
 ]
 
@@ -23,7 +23,8 @@ Provider = Literal[
 class ApiKeyCreate(BaseModel):
     provider: Provider
     api_key: str = ""  # plain-text key from user; empty for ollama
-    extra_fields: dict = {}  # org_id, base_url, model_name, db fields, etc.
+    base_url: Optional[str] = None  # for Ollama, custom providers, database host
+    additional_config: dict = {}  # org_id, database port, etc.
 
 
 class ApiKeyResponse(BaseModel):
@@ -33,7 +34,8 @@ class ApiKeyResponse(BaseModel):
     user_id: UUID
     provider: Provider
     key_hint: str
-    extra_fields: dict
+    base_url: Optional[str]
+    additional_config: dict
     is_valid: Optional[bool]
     last_tested_at: Optional[datetime]
     created_at: datetime

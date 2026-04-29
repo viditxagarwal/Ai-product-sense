@@ -1,40 +1,22 @@
--- API Keys table for storing encrypted provider credentials
-CREATE TABLE IF NOT EXISTS api_keys (
-    id          UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    user_id     UUID NOT NULL,
-    provider    TEXT NOT NULL,           -- e.g. 'openai', 'anthropic', 'groq', 'google_ai', 'ollama', 'custom_openai', 'tavily', 'alpha_vantage', 'polygon', 'database_pg', 'database_mysql'
-    encrypted_key TEXT NOT NULL,          -- encrypted API key / connection string
-    key_hint    TEXT NOT NULL DEFAULT '', -- last 6 chars of key for display
-    extra_fields JSONB DEFAULT '{}',     -- provider-specific extra fields (org_id, base_url, model_name, db host/port, etc.)
-    is_valid    BOOLEAN DEFAULT NULL,    -- NULL = untested, TRUE = passed, FALSE = failed
+-- API Keys table (encrypted storage)
+CREATE TABLE api_keys (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,  -- 'openai', 'anthropic', 'groq', 'google_ai', 'ollama', 'custom_openai', 'tavily', 'alpha_vantage', 'polygon', 'database_postgres', 'database_mysql'
+    encrypted_key TEXT NOT NULL,  -- encrypted API key
+    key_hint TEXT NOT NULL DEFAULT '',  -- last 6 characters for display
+    base_url TEXT,  -- for Ollama, custom providers, database host
+    additional_config JSONB DEFAULT '{}',  -- org_id, database port, etc.
+    is_valid BOOLEAN DEFAULT NULL,  -- NULL = untested, true = passed, false = failed
     last_tested_at TIMESTAMPTZ,
-    created_at  TIMESTAMPTZ DEFAULT now() NOT NULL,
-    updated_at  TIMESTAMPTZ DEFAULT now() NOT NULL,
-
-    CONSTRAINT unique_user_provider UNIQUE (user_id, provider)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id, provider)
 );
 
 -- RLS
 ALTER TABLE api_keys ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Users can manage their own api_keys"
-    ON api_keys FOR ALL
-    USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users see own keys" ON api_keys FOR ALL USING (auth.uid() = user_id);
 
 -- Index
-CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys (user_id);
-
--- Auto-update updated_at
-CREATE OR REPLACE FUNCTION update_api_keys_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = now();
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trg_api_keys_updated_at
-    BEFORE UPDATE ON api_keys
-    FOR EACH ROW
-    EXECUTE FUNCTION update_api_keys_updated_at();
+CREATE INDEX idx_api_keys_user ON api_keys(user_id);

@@ -49,7 +49,8 @@ interface ApiKeyRecord {
   id: string;
   provider: string;
   key_hint: string;
-  extra_fields: Record<string, string>;
+  base_url: string | null;
+  additional_config: Record<string, string>;
   is_valid: boolean | null;
   last_tested_at: string | null;
 }
@@ -73,6 +74,7 @@ interface ProviderDef {
   keyLabel: string;
   keyPlaceholder: string;
   needsKey: boolean;
+  baseUrlField?: { label: string; placeholder: string };
   extraFields?: { key: string; label: string; placeholder: string; required?: boolean }[];
   modelsUnlocked?: string[];
   description?: string;
@@ -133,7 +135,7 @@ const PROVIDERS: ProviderDef[] = [
     keyLabel: "",
     keyPlaceholder: "",
     needsKey: false,
-    extraFields: [{ key: "base_url", label: "Ollama Base URL", placeholder: "http://localhost:11434" }],
+    baseUrlField: { label: "Ollama Base URL", placeholder: "http://localhost:11434" },
     description: "Run models locally. No API key needed.",
   },
   {
@@ -145,8 +147,8 @@ const PROVIDERS: ProviderDef[] = [
     keyLabel: "API Key (optional)",
     keyPlaceholder: "sk-...",
     needsKey: false,
+    baseUrlField: { label: "Base URL", placeholder: "https://your-endpoint.com" },
     extraFields: [
-      { key: "base_url", label: "Base URL", placeholder: "https://your-endpoint.com", required: true },
       { key: "model_name", label: "Model Name", placeholder: "my-model" },
     ],
     description: "vLLM, LiteLLM, Azure OpenAI, or any OpenAI-compatible endpoint.",
@@ -186,7 +188,7 @@ const PROVIDERS: ProviderDef[] = [
     description: "Real-time and historical market data.",
   },
   {
-    provider: "database_pg",
+    provider: "database_postgres",
     name: "PostgreSQL",
     icon: Database,
     color: "bg-sky-600",
@@ -220,6 +222,7 @@ export default function ApiKeysPage() {
   const [loading, setLoading] = useState(true);
   const [editProvider, setEditProvider] = useState<ProviderDef | null>(null);
   const [formKey, setFormKey] = useState("");
+  const [formBaseUrl, setFormBaseUrl] = useState("");
   const [formExtra, setFormExtra] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
@@ -251,11 +254,13 @@ export default function ApiKeysPage() {
       await apiPost("/settings/api-keys", {
         provider: editProvider.provider,
         api_key: formKey,
-        extra_fields: formExtra,
+        base_url: formBaseUrl || null,
+        additional_config: formExtra,
       });
       toast.success(`${editProvider.name} key saved`);
       setEditProvider(null);
       setFormKey("");
+      setFormBaseUrl("");
       setFormExtra({});
       fetchKeys();
     } catch {
@@ -300,7 +305,8 @@ export default function ApiKeysPage() {
     const existing = getKeyForProvider(def.provider);
     setEditProvider(def);
     setFormKey("");
-    setFormExtra(existing?.extra_fields || {});
+    setFormBaseUrl(existing?.base_url || "");
+    setFormExtra(existing?.additional_config || {});
     setShowKey(false);
   }
 
@@ -483,6 +489,16 @@ export default function ApiKeysPage() {
                     {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
                 </div>
+              </div>
+            )}
+            {editProvider?.baseUrlField && (
+              <div className="space-y-2">
+                <Label>{editProvider.baseUrlField.label}</Label>
+                <Input
+                  placeholder={editProvider.baseUrlField.placeholder}
+                  value={formBaseUrl}
+                  onChange={(e) => setFormBaseUrl(e.target.value)}
+                />
               </div>
             )}
             {editProvider?.extraFields?.map((field) => (

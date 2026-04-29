@@ -21,7 +21,7 @@ const PROVIDER_DISPLAY: Record<string, string> = {
   tavily: "Tavily",
   alpha_vantage: "Alpha Vantage",
   polygon: "Polygon.io",
-  database_pg: "PostgreSQL",
+  database_postgres: "PostgreSQL",
   database_mysql: "MySQL",
 };
 

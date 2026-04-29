@@ -62,7 +62,7 @@ const BUILTIN_TOOLS = new Set([
 export const TOOL_PROVIDER_MAP: Record<string, string[]> = {
   web_search: ["tavily"],
   financial_data_api: ["alpha_vantage", "polygon"],
-  database_query: ["database_pg", "database_mysql"],
+  database_query: ["database_postgres", "database_mysql"],
 };
 
 export interface ApiKeyInfo {
@@ -70,7 +70,8 @@ export interface ApiKeyInfo {
   is_valid: boolean | null;
   key_hint: string;
   last_tested_at: string | null;
-  extra_fields: Record<string, string>;
+  base_url: string | null;
+  additional_config: Record<string, string>;
 }
 
 interface ToolCardProps {
@@ -110,10 +111,10 @@ function getConnectionStatus(
   }
 
   if (toolName === "database_query") {
-    const dbKey = apiKeys.find((k) => k.provider === "database_pg" || k.provider === "database_mysql");
+    const dbKey = apiKeys.find((k) => k.provider === "database_postgres" || k.provider === "database_mysql");
     if (dbKey) {
-      const host = dbKey.extra_fields?.host || dbKey.key_hint;
-      const type = dbKey.provider === "database_pg" ? "PostgreSQL" : "MySQL";
+      const host = dbKey.base_url || dbKey.key_hint;
+      const type = dbKey.provider === "database_postgres" ? "PostgreSQL" : "MySQL";
       return { type: "connected", label: "Connected", detail: `${type} @ ${host || "configured"} ✓` };
     }
     return { type: "not_configured", label: "No database connected" };
