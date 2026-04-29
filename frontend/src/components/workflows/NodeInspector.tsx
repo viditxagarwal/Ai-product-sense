@@ -154,6 +154,16 @@ export default function NodeInspector({
           />
         </div>
 
+        {/* System Prompt Hint — shown when node has one (from templates) */}
+        {data.systemPromptHint && (
+          <div className="rounded-md border border-indigo-200 bg-indigo-50/50 p-2.5">
+            <p className="text-[10px] font-medium text-indigo-700">Prompt Hint</p>
+            <p className="mt-0.5 text-[10px] text-indigo-600">
+              {data.systemPromptHint as string}
+            </p>
+          </div>
+        )}
+
         {/* Bound Tools — shown for Step and Decision */}
         {(nodeType === "step" || nodeType === "decision") && (
           <div className="space-y-2">

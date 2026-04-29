@@ -34,6 +34,8 @@ export interface WorkflowNodeData {
   topK?: number;
   rerankingEnabled?: boolean;
   knowledgeLayers?: string;
+  // Template hints
+  systemPromptHint?: string;
   [key: string]: unknown;
 }
 

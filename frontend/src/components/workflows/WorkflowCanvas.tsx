@@ -554,6 +554,137 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
     [setNodes]
   );
 
+  // ─── Template: add pre-wired pattern ───
+  const handleAddTemplate = useCallback(
+    (templateId: string) => {
+      if (templateId !== "plan_and_execute") return;
+
+      const ts = Date.now();
+      const baseX = 300;
+      const baseY = 100;
+      const yGap = 160;
+
+      const plannerId = `step_planner_${ts}`;
+      const executorId = `step_executor_${ts}`;
+      const decisionId = `decision_complete_${ts}`;
+      const synthesizeId = `step_synthesize_${ts}`;
+
+      const templateNodes: Node[] = [
+        {
+          id: plannerId,
+          type: "step",
+          position: { x: baseX, y: baseY },
+          data: {
+            label: "Planner",
+            nodeType: "step",
+            purpose: "Break the task into sequential steps",
+            systemPromptHint:
+              "This node's system prompt should instruct the LLM to break the task into numbered steps. The plan becomes the state that the Executor iterates through.",
+            boundTools: [],
+            onMissingData: "flag",
+            onToolFailure: "retry",
+            onLowConfidence: "proceed",
+          },
+        },
+        {
+          id: executorId,
+          type: "step",
+          position: { x: baseX, y: baseY + yGap },
+          data: {
+            label: "Executor",
+            nodeType: "step",
+            purpose: "Execute the current step from the plan",
+            boundTools: [],
+            onMissingData: "flag",
+            onToolFailure: "retry",
+            onLowConfidence: "proceed",
+          },
+        },
+        {
+          id: decisionId,
+          type: "decision",
+          position: { x: baseX, y: baseY + yGap * 2 },
+          data: {
+            label: "All Steps Complete?",
+            nodeType: "decision",
+            purpose: "Check if all steps in the plan have been executed",
+            conditionType: "rule_based",
+            conditionPrompt: "steps_remaining === 0",
+            pathMappings: "true → Synthesize\nfalse → Executor",
+            boundTools: [],
+          },
+        },
+        {
+          id: synthesizeId,
+          type: "step",
+          position: { x: baseX, y: baseY + yGap * 3 },
+          data: {
+            label: "Synthesize",
+            nodeType: "step",
+            purpose: "Merge all step outputs into a final result",
+            boundTools: [],
+            onMissingData: "flag",
+            onToolFailure: "retry",
+            onLowConfidence: "proceed",
+          },
+        },
+      ];
+
+      const templateEdges: Edge[] = [
+        // Planner → Executor
+        {
+          id: `e-${plannerId}-${executorId}-${ts}`,
+          source: plannerId,
+          target: executorId,
+          type: "deletable",
+          animated: true,
+          style: { strokeWidth: 2 },
+        },
+        // Executor → Decision
+        {
+          id: `e-${executorId}-${decisionId}-${ts}`,
+          source: executorId,
+          target: decisionId,
+          type: "deletable",
+          animated: true,
+          style: { strokeWidth: 2 },
+        },
+        // Decision → Synthesize (exit path)
+        {
+          id: `e-${decisionId}-${synthesizeId}-${ts}`,
+          source: decisionId,
+          target: synthesizeId,
+          type: "deletable",
+          animated: true,
+          style: { strokeWidth: 2 },
+        },
+        // Loopback: Decision → Executor (loop while steps remaining)
+        {
+          id: `loopback-${decisionId}-${executorId}-${ts}`,
+          source: decisionId,
+          target: executorId,
+          type: "loopback",
+          animated: false,
+          data: {
+            label: "Steps remaining",
+            loopCondition: "max_iterations",
+            maxIterations: 10,
+            exitThreshold: 1.0,
+            exitNodeId: synthesizeId,
+          } as LoopbackEdgeData,
+        },
+      ];
+
+      setNodes((nds) => [...nds, ...templateNodes]);
+      setEdges((eds) => [...eds, ...templateEdges]);
+      setEntryPoint(plannerId);
+      toast.success(
+        "Plan & Execute pattern added. All nodes are regular — customize tools, models, and prompts."
+      );
+    },
+    [setNodes, setEdges]
+  );
+
   // Drop from toolbar drag
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -730,7 +861,7 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
 
       {/* Three-panel layout */}
       <div className="flex flex-1 overflow-hidden">
-        <NodeToolbar onAddNode={handleAddNode} />
+        <NodeToolbar onAddNode={handleAddNode} onAddTemplate={handleAddTemplate} />
 
         {/* Canvas wrapper with keyboard handler */}
         <div
