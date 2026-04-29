@@ -13,11 +13,13 @@ import {
   useEdgesState,
   type Connection,
   type NodeTypes,
+  type EdgeTypes,
   type Node,
   type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { ArrowLeft, Save, Check } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -28,10 +30,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useWorkflowStore } from "@/stores/workflow-store";
 import NodeToolbar from "./NodeToolbar";
 import NodeInspector from "./NodeInspector";
 import WorkflowNode from "./CustomNodes/WorkflowNode";
+import DeletableEdge from "./CustomEdge";
 import { NODE_TYPE_MAP } from "./nodeTypes";
 import type { WorkflowNodeData } from "./CustomNodes/WorkflowNode";
 
@@ -54,15 +67,25 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
     "idle"
   );
 
+  // Deletion state
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [nodeToDelete, setNodeToDelete] = useState<Node | null>(null);
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    type: "node" | "edge";
+    id: string;
+    x: number;
+    y: number;
+  } | null>(null);
+
   const nodeTypes: NodeTypes = useMemo(
     () => ({
-      // New types
       step: WorkflowNode,
       decision: WorkflowNode,
       parallel: WorkflowNode,
       human_review: WorkflowNode,
       retriever: WorkflowNode,
-      // Legacy types (backward compatibility for existing workflows)
       agent_node: WorkflowNode,
       route: WorkflowNode,
       parallelization: WorkflowNode,
@@ -71,6 +94,13 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
       human_checkpoint: WorkflowNode,
       classifier: WorkflowNode,
       validator: WorkflowNode,
+    }),
+    []
+  );
+
+  const edgeTypes: EdgeTypes = useMemo(
+    () => ({
+      deletable: DeletableEdge,
     }),
     []
   );
@@ -95,7 +125,12 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
       setNodes(gd.nodes as Node[]);
     }
     if (gd && gd.edges) {
-      setEdges(gd.edges as Edge[]);
+      // Ensure existing edges use the deletable type
+      const edgesWithType = (gd.edges as Edge[]).map((e) => ({
+        ...e,
+        type: "deletable",
+      }));
+      setEdges(edgesWithType);
     }
   }, [currentWorkflow, setNodes, setEdges]);
 
@@ -170,7 +205,7 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
         addEdge(
           {
             ...connection,
-            type: "default",
+            type: "deletable",
             animated: true,
             style: { strokeWidth: 2 },
           },
@@ -190,7 +225,173 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
 
   const onPaneClick = useCallback(() => {
     setSelectedNode(null);
+    setContextMenu(null);
   }, []);
+
+  // ─── Deletion helpers ───
+
+  /** Delete a node by id, auto-reconnect surrounding nodes, update entry/exit */
+  const deleteNodeById = useCallback(
+    (nodeId: string) => {
+      const incomingEdges = edgesRef.current.filter((e) => e.target === nodeId);
+      const outgoingEdges = edgesRef.current.filter((e) => e.source === nodeId);
+
+      // Auto-reconnect: if A→B→C, connect A→C
+      const reconnectEdges: Edge[] = [];
+      if (incomingEdges.length > 0 && outgoingEdges.length > 0) {
+        for (const inc of incomingEdges) {
+          for (const out of outgoingEdges) {
+            // Don't create duplicate edges
+            const exists = edgesRef.current.some(
+              (e) => e.source === inc.source && e.target === out.target
+            );
+            if (!exists && inc.source !== out.target) {
+              reconnectEdges.push({
+                id: `e-${inc.source}-${out.target}-${Date.now()}`,
+                source: inc.source,
+                target: out.target,
+                type: "deletable",
+                animated: true,
+                style: { strokeWidth: 2 },
+              });
+            }
+          }
+        }
+      }
+
+      // Remove node and its edges, add reconnect edges
+      setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+      setEdges((eds) => [
+        ...eds.filter((e) => e.source !== nodeId && e.target !== nodeId),
+        ...reconnectEdges,
+      ]);
+
+      // Clear selection if deleted node was selected
+      setSelectedNode((prev) => (prev?.id === nodeId ? null : prev));
+
+      // Update entry/exit if they referenced the deleted node
+      if (entryRef.current === nodeId) setEntryPoint("");
+      if (exitRef.current === nodeId) setExitPoint("");
+
+      if (reconnectEdges.length > 0) {
+        toast.success("Node deleted. Surrounding nodes reconnected.");
+      } else {
+        toast.success("Node deleted.");
+      }
+    },
+    [setNodes, setEdges]
+  );
+
+  /** Prompt confirmation then delete */
+  const confirmDeleteNode = useCallback((node: Node) => {
+    setNodeToDelete(node);
+    setDeleteDialogOpen(true);
+  }, []);
+
+  const handleConfirmDelete = useCallback(() => {
+    if (nodeToDelete) {
+      deleteNodeById(nodeToDelete.id);
+    }
+    setDeleteDialogOpen(false);
+    setNodeToDelete(null);
+  }, [nodeToDelete, deleteNodeById]);
+
+  /** Delete an edge by id (instant, no confirmation) */
+  const deleteEdgeById = useCallback(
+    (edgeId: string) => {
+      setEdges((eds) => eds.filter((e) => e.id !== edgeId));
+      toast.success("Edge deleted.");
+    },
+    [setEdges]
+  );
+
+  /** Disconnect all edges from a node */
+  const disconnectNode = useCallback(
+    (nodeId: string) => {
+      setEdges((eds) =>
+        eds.filter((e) => e.source !== nodeId && e.target !== nodeId)
+      );
+      toast.success("All edges disconnected.");
+    },
+    [setEdges]
+  );
+
+  /** Duplicate a node */
+  const duplicateNode = useCallback(
+    (node: Node) => {
+      const config = NODE_TYPE_MAP[node.type || "step"];
+      const id = `${node.type || "step"}_${Date.now()}`;
+      const newNode: Node = {
+        id,
+        type: node.type,
+        position: {
+          x: node.position.x + 40,
+          y: node.position.y + 40,
+        },
+        data: { ...node.data },
+      };
+      setNodes((nds) => [...nds, newNode]);
+      toast.success(`Duplicated "${(node.data as WorkflowNodeData).label || config?.label || "Node"}".`);
+    },
+    [setNodes]
+  );
+
+  // ─── Keyboard shortcut: Delete/Backspace ───
+  // We disable React Flow's built-in deleteKeyCode and handle it ourselves
+  // to show confirmation for nodes
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+
+      // Don't intercept if user is typing in an input
+      const tag = (event.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      // Check for selected nodes
+      const selectedNodes = nodesRef.current.filter((n) => n.selected);
+      const selectedEdges = edgesRef.current.filter((e) => e.selected);
+
+      if (selectedNodes.length > 0) {
+        event.preventDefault();
+        // Confirm for first selected node
+        confirmDeleteNode(selectedNodes[0]);
+      } else if (selectedEdges.length > 0) {
+        event.preventDefault();
+        // Instant delete for edges
+        for (const edge of selectedEdges) {
+          deleteEdgeById(edge.id);
+        }
+      }
+    },
+    [confirmDeleteNode, deleteEdgeById]
+  );
+
+  // ─── Context menu handlers ───
+  const onNodeContextMenu = useCallback(
+    (event: React.MouseEvent, node: Node) => {
+      event.preventDefault();
+      setContextMenu({
+        type: "node",
+        id: node.id,
+        x: event.clientX,
+        y: event.clientY,
+      });
+    },
+    []
+  );
+
+  const onEdgeContextMenu = useCallback(
+    (event: React.MouseEvent, edge: Edge) => {
+      event.preventDefault();
+      setContextMenu({
+        type: "edge",
+        id: edge.id,
+        x: event.clientX,
+        y: event.clientY,
+      });
+    },
+    []
+  );
 
   // Add node from toolbar click
   const handleAddNode = useCallback(
@@ -233,7 +434,6 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
       const config = NODE_TYPE_MAP[nodeType];
       const id = `${nodeType}_${Date.now()}`;
 
-      // Get canvas bounds for position calculation
       const reactFlowBounds = (
         event.currentTarget as HTMLElement
       ).getBoundingClientRect();
@@ -269,7 +469,6 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
           n.id === nodeId ? { ...n, data: { ...n.data, ...data } } : n
         )
       );
-      // Also update selectedNode for inspector reactivity
       setSelectedNode((prev) =>
         prev && prev.id === nodeId
           ? { ...prev, data: { ...prev.data, ...data } }
@@ -291,6 +490,11 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
     id: n.id,
     label: (n.data as unknown as WorkflowNodeData).label || n.id,
   }));
+
+  // Resolve context menu targets
+  const contextNode = contextMenu?.type === "node"
+    ? nodes.find((n) => n.id === contextMenu.id) || null
+    : null;
 
   return (
     <div className="flex h-[calc(100vh-4rem)] flex-col">
@@ -388,7 +592,14 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
       <div className="flex flex-1 overflow-hidden">
         <NodeToolbar onAddNode={handleAddNode} />
 
-        <div className="flex-1" onDragOver={onDragOver} onDrop={onDrop}>
+        {/* Canvas wrapper with keyboard handler */}
+        <div
+          className="flex-1"
+          onDragOver={onDragOver}
+          onDrop={onDrop}
+          onKeyDown={handleKeyDown}
+          tabIndex={0}
+        >
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -397,13 +608,17 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
             onConnect={onConnect}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
+            onNodeContextMenu={onNodeContextMenu}
+            onEdgeContextMenu={onEdgeContextMenu}
             nodeTypes={nodeTypes}
-            fitView
-            deleteKeyCode={["Backspace", "Delete"]}
+            edgeTypes={edgeTypes}
             defaultEdgeOptions={{
+              type: "deletable",
               animated: true,
               style: { strokeWidth: 2, stroke: "#94a3b8" },
             }}
+            fitView
+            deleteKeyCode={null}
           >
             <Controls position="bottom-left" />
             <MiniMap
@@ -427,9 +642,113 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
             node={selectedNode}
             onUpdate={handleNodeUpdate}
             onClose={() => setSelectedNode(null)}
+            onDeleteNode={confirmDeleteNode}
           />
         )}
       </div>
+
+      {/* Delete Node Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this node?</AlertDialogTitle>
+            <AlertDialogDescription>
+              All connected edges will also be removed.
+              {nodeToDelete && (() => {
+                const inc = edges.filter((e) => e.target === nodeToDelete.id);
+                const out = edges.filter((e) => e.source === nodeToDelete.id);
+                if (inc.length > 0 && out.length > 0) {
+                  return " Surrounding nodes will be reconnected automatically.";
+                }
+                return "";
+              })()}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setNodeToDelete(null)}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmDelete}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              Delete Node
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Right-click Context Menu (rendered as a fixed overlay) */}
+      {contextMenu && (
+        <div
+          className="fixed inset-0 z-50"
+          onClick={() => setContextMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setContextMenu(null);
+          }}
+        >
+          <div
+            className="absolute z-50 min-w-[160px] overflow-hidden rounded-md border border-slate-200 bg-white p-1 shadow-lg"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {contextMenu.type === "node" && contextNode && (
+              <>
+                <button
+                  className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs hover:bg-slate-100"
+                  onClick={() => {
+                    confirmDeleteNode(contextNode);
+                    setContextMenu(null);
+                  }}
+                >
+                  <span className="text-red-600">Delete Node</span>
+                </button>
+                <button
+                  className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs hover:bg-slate-100"
+                  onClick={() => {
+                    duplicateNode(contextNode);
+                    setContextMenu(null);
+                  }}
+                >
+                  Duplicate Node
+                </button>
+                <button
+                  className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs hover:bg-slate-100"
+                  onClick={() => {
+                    disconnectNode(contextNode.id);
+                    setContextMenu(null);
+                  }}
+                >
+                  Disconnect All Edges
+                </button>
+              </>
+            )}
+            {contextMenu.type === "edge" && (
+              <>
+                <button
+                  className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs hover:bg-slate-100"
+                  onClick={() => {
+                    deleteEdgeById(contextMenu.id);
+                    setContextMenu(null);
+                  }}
+                >
+                  <span className="text-red-600">Delete Edge</span>
+                </button>
+                <button
+                  className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100"
+                  onClick={() => {
+                    toast.info("Edge conditions can be configured via Decision nodes.");
+                    setContextMenu(null);
+                  }}
+                >
+                  Add Condition
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

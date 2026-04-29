@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { X } from "lucide-react";
+import { X, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,12 +26,14 @@ interface NodeInspectorProps {
   node: Node | null;
   onUpdate: (nodeId: string, data: Partial<WorkflowNodeData>) => void;
   onClose: () => void;
+  onDeleteNode?: (node: Node) => void;
 }
 
 export default function NodeInspector({
   node,
   onUpdate,
   onClose,
+  onDeleteNode,
 }: NodeInspectorProps) {
   const { tools, fetchTools } = useToolStore();
   const { providers } = useAvailableModels();
@@ -500,6 +502,21 @@ export default function NodeInspector({
           </div>
         )}
       </div>
+
+      {/* Delete Node Button */}
+      {onDeleteNode && node && (
+        <div className="border-t border-slate-200 p-4">
+          <Button
+            variant="destructive"
+            size="sm"
+            className="w-full"
+            onClick={() => onDeleteNode(node)}
+          >
+            <Trash2 className="mr-1.5 size-3.5" />
+            Delete Node
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
