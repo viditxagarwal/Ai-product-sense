@@ -23,6 +23,11 @@ export function setTokenRefresher(refresher: () => Promise<string | null>) {
   tokenRefresher = refresher;
 }
 
+/** Expose the current access token for non-fetch uses (e.g. WebSocket auth) */
+export function getStoredToken(): string | null {
+  return tokenAccessor?.() ?? null;
+}
+
 async function doFetch(
   path: string,
   token: string,

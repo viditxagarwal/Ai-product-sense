@@ -3,7 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { Send, Paperclip, Loader2, X, Crosshair, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { apiPost } from "@/lib/api";
+import { apiPost, getStoredToken } from "@/lib/api";
 import { useThreadStore } from "@/stores/thread-store";
 import { useExecutionStore } from "@/stores/execution-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
@@ -47,10 +47,7 @@ export default function ChatInput() {
     (messageText: string) => {
       if (!activeThreadId) return;
 
-      const token = document.cookie
-        .split("; ")
-        .find((c) => c.startsWith("sb-access-token="))
-        ?.split("=")[1];
+      const token = getStoredToken();
 
       const wsUrl = `${WS_BASE}/threads/${activeThreadId}/stream${
         token ? `?token=${token}` : ""
