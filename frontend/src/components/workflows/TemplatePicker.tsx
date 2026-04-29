@@ -163,15 +163,18 @@ export default function TemplatePicker({
           {WORKFLOW_TEMPLATES.map((tpl) => {
             const Icon = PREVIEW_ICONS[tpl.id] || Box;
             const isBlank = tpl.id === "blank";
+            const isReAct = tpl.id === "react_agent";
 
             return (
               <button
                 key={tpl.id}
                 onClick={() => onSelect(tpl)}
                 className={`group flex flex-col rounded-lg border-2 p-3 text-left transition-all hover:shadow-md ${
-                  isBlank
-                    ? "border-dashed border-slate-300 hover:border-slate-400"
-                    : "border-slate-200 hover:border-blue-300"
+                  isReAct
+                    ? "col-span-2 border-blue-300 bg-blue-50/30 ring-1 ring-blue-200 hover:border-blue-400 sm:col-span-2"
+                    : isBlank
+                      ? "border-dashed border-slate-300 hover:border-slate-400"
+                      : "border-slate-200 hover:border-blue-300"
                 }`}
               >
                 {/* Header with icon + name */}
@@ -184,6 +187,11 @@ export default function TemplatePicker({
                   <span className="text-sm font-semibold text-slate-800">
                     {tpl.label}
                   </span>
+                  {isReAct && (
+                    <Badge className="bg-blue-500 text-[9px] text-white hover:bg-blue-500">
+                      Most Popular
+                    </Badge>
+                  )}
                 </div>
 
                 {/* Visual preview */}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { X, Trash2, RefreshCw } from "lucide-react";
+import { X, Trash2, RefreshCw, Zap, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,6 +27,7 @@ interface NodeInspectorProps {
   node: Node | null;
   edges?: Edge[];
   onUpdate: (nodeId: string, data: Partial<WorkflowNodeData>) => void;
+  onUpdateEdge?: (edgeId: string, data: Partial<LoopbackEdgeData>) => void;
   onClose: () => void;
   onDeleteNode?: (node: Node) => void;
 }
@@ -35,6 +36,7 @@ export default function NodeInspector({
   node,
   edges = [],
   onUpdate,
+  onUpdateEdge,
   onClose,
   onDeleteNode,
 }: NodeInspectorProps) {
@@ -96,6 +98,88 @@ export default function NodeInspector({
       </div>
 
       <div className="flex-1 space-y-5 overflow-y-auto p-4">
+        {/* ─── ReAct Quick Config ─── */}
+        {node && nodeType === "step" && typeof data.systemPromptHint === "string" && (data.systemPromptHint as string).includes("ReAct Agent") && (() => {
+          // Find the loopback edge targeting this node (for max iterations control)
+          const loopEdge = edges.find(
+            (e) => e.type === "loopback" && e.target === node.id
+          );
+          const loopData = (loopEdge?.data || {}) as LoopbackEdgeData;
+          const maxIter = loopData.maxIterations ?? 10;
+
+          return (
+            <div className="space-y-3 rounded-lg border-2 border-blue-200 bg-blue-50/50 p-3">
+              <div className="flex items-center gap-2">
+                <Zap className="size-3.5 text-blue-600" />
+                <Label className="text-xs font-semibold text-blue-700">
+                  Quick Config
+                </Label>
+              </div>
+
+              {/* Agent Persona — link to Prompt Lab */}
+              <div className="space-y-1">
+                <Label className="text-[11px] text-slate-500">Agent Persona</Label>
+                <a
+                  href="/prompts"
+                  className="flex items-center gap-1.5 rounded-md border border-blue-200 bg-white px-2.5 py-1.5 text-xs text-blue-600 transition-colors hover:bg-blue-50"
+                >
+                  <ExternalLink className="size-3" />
+                  Configure in Prompt Lab
+                </a>
+              </div>
+
+              {/* Available Tools (compact toggles) */}
+              <div className="space-y-1">
+                <Label className="text-[11px] text-slate-500">Available Tools</Label>
+                <div className="max-h-28 space-y-0.5 overflow-y-auto rounded-md border bg-white p-1.5">
+                  {enabledTools.length === 0 ? (
+                    <p className="py-1 text-center text-[10px] text-slate-400">
+                      No enabled tools
+                    </p>
+                  ) : (
+                    enabledTools.map((tool) => {
+                      const bound = ((data.boundTools as string[]) || []).includes(tool.id);
+                      return (
+                        <div
+                          key={tool.id}
+                          className="flex items-center justify-between rounded px-1.5 py-0.5 hover:bg-slate-50"
+                        >
+                          <span className="text-[11px]">{tool.display_name}</span>
+                          <Switch
+                            checked={bound}
+                            onCheckedChange={() => toggleTool(tool.id)}
+                          />
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Max Iterations */}
+              <div className="space-y-1">
+                <Label className="text-[11px] text-slate-500">
+                  Max iterations before stopping
+                </Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={maxIter}
+                  onChange={(e) => {
+                    if (loopEdge && onUpdateEdge) {
+                      onUpdateEdge(loopEdge.id, {
+                        maxIterations: parseInt(e.target.value, 10) || 5,
+                      });
+                    }
+                  }}
+                  className="h-7 text-xs"
+                />
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Loop Target Badge */}
         {node && (() => {
           const loopbackEdges = edges.filter(

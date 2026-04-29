@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, GitBranch, Trash2 } from "lucide-react";
+import { Plus, GitBranch, Trash2, Zap } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,7 @@ import { CardGridSkeleton } from "@/components/ui/skeletons";
 import { useWorkflowStore } from "@/stores/workflow-store";
 import { useDomainStore } from "@/stores/domain-store";
 import TemplatePicker from "./TemplatePicker";
-import type { WorkflowTemplate } from "./workflowTemplates";
+import { WORKFLOW_TEMPLATES, type WorkflowTemplate } from "./workflowTemplates";
 import type { WorkflowResponse } from "@/types";
 
 export default function WorkflowList() {
@@ -50,6 +50,9 @@ export default function WorkflowList() {
   const [newDesc, setNewDesc] = useState("");
   const [newDomainId, setNewDomainId] = useState("");
   const [creating, setCreating] = useState(false);
+  const [quickStartOpen, setQuickStartOpen] = useState(false);
+  const [quickStartDomain, setQuickStartDomain] = useState("");
+  const [quickStartName, setQuickStartName] = useState("ReAct Agent");
 
   // Pending workflow metadata (set in step 1, used after template pick)
   const [pendingMeta, setPendingMeta] = useState<{
@@ -104,7 +107,33 @@ export default function WorkflowList() {
       setNewDesc("");
       setNewDomainId("");
       setPendingMeta(null);
-      router.push(`/workflows/${wf.id}`);
+      const qs = template.id === "react_agent" ? "?onboarding=react" : "";
+      router.push(`/workflows/${wf.id}${qs}`);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  // Quick Start: create a ReAct Agent workflow directly
+  const handleQuickStart = async () => {
+    if (!quickStartDomain) return;
+    setQuickStartOpen(false);
+    setCreating(true);
+    try {
+      const reactTemplate = WORKFLOW_TEMPLATES.find((t) => t.id === "react_agent")!;
+      const graph = reactTemplate.graph();
+      const wf = await createWorkflow({
+        domain_id: quickStartDomain,
+        workflow_name: quickStartName.trim() || "ReAct Agent",
+        template_source: "ReAct Agent",
+        graph_data: {
+          nodes: graph.nodes as unknown as Record<string, unknown>[],
+          edges: graph.edges as unknown as Record<string, unknown>[],
+        },
+      });
+      setQuickStartDomain("");
+      setQuickStartName("ReAct Agent");
+      router.push(`/workflows/${wf.id}?onboarding=react`);
     } finally {
       setCreating(false);
     }
@@ -191,6 +220,78 @@ export default function WorkflowList() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {/* Quick Start: ReAct Agent card */}
+      <button
+        onClick={() => setQuickStartOpen(true)}
+        disabled={creating}
+        className="flex w-full items-center gap-4 rounded-lg border-2 border-blue-200 bg-gradient-to-r from-blue-50 to-indigo-50 p-4 text-left transition-all hover:border-blue-300 hover:shadow-md"
+      >
+        <div className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-blue-500">
+          <Zap className="size-5 text-white" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-slate-800">
+              Quick Start: ReAct Agent
+            </span>
+            <Badge className="bg-blue-500 text-[9px] text-white hover:bg-blue-500">
+              Most Common
+            </Badge>
+          </div>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Create a tool-using agent in seconds. It thinks, acts, observes, and repeats until done.
+          </p>
+        </div>
+        <span className="shrink-0 text-xs font-medium text-blue-600">
+          Create &rarr;
+        </span>
+      </button>
+
+      {/* Quick Start domain picker dialog */}
+      <Dialog open={quickStartOpen} onOpenChange={setQuickStartOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Quick Start: ReAct Agent</DialogTitle>
+            <DialogDescription>
+              Pick a domain and name, then you&apos;re on the canvas.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-2">
+              <Label>Workflow Name</Label>
+              <Input
+                placeholder="ReAct Agent"
+                value={quickStartName}
+                onChange={(e) => setQuickStartName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Domain</Label>
+              <Select value={quickStartDomain} onValueChange={setQuickStartDomain}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a domain" />
+                </SelectTrigger>
+                <SelectContent>
+                  {domains.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.display_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setQuickStartOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleQuickStart} disabled={!quickStartDomain || creating}>
+              {creating ? "Creating..." : "Create ReAct Agent"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Template picker dialog (step 2) */}
       <TemplatePicker

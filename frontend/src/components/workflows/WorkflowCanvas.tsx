@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ReactFlow,
   MiniMap,
@@ -50,6 +50,7 @@ import LoopbackEdge from "./LoopbackEdge";
 import type { LoopbackEdgeData } from "./LoopbackEdge";
 import { NODE_TYPE_MAP } from "./nodeTypes";
 import TemplatePicker from "./TemplatePicker";
+import ReActOnboarding from "./ReActOnboarding";
 import type { WorkflowTemplate } from "./workflowTemplates";
 import type { WorkflowNodeData } from "./CustomNodes/WorkflowNode";
 
@@ -131,8 +132,19 @@ function migrateLoopNodes(
 
 export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { currentWorkflow, fetchWorkflow, updateWorkflow, loading } =
     useWorkflowStore();
+
+  // Show onboarding overlay for ReAct template
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  useEffect(() => {
+    if (searchParams.get("onboarding") === "react") {
+      setShowOnboarding(true);
+      // Clean up the URL query param without navigation
+      window.history.replaceState({}, "", `/workflows/${workflowId}`);
+    }
+  }, [searchParams, workflowId]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([] as Node[]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([] as Edge[]);
@@ -771,12 +783,15 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
 
         {/* Canvas wrapper with keyboard handler */}
         <div
-          className="flex-1"
+          className="relative flex-1"
           onDragOver={onDragOver}
           onDrop={onDrop}
           onKeyDown={handleKeyDown}
           tabIndex={0}
         >
+          {showOnboarding && (
+            <ReActOnboarding onDismiss={() => setShowOnboarding(false)} />
+          )}
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -829,6 +844,7 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
             node={selectedNode}
             edges={edges}
             onUpdate={handleNodeUpdate}
+            onUpdateEdge={handleEdgeUpdate}
             onClose={() => setSelectedNode(null)}
             onDeleteNode={confirmDeleteNode}
           />
