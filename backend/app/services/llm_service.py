@@ -4,6 +4,7 @@ Supports OpenAI and OpenAI-compatible providers (Groq, custom).
 Anthropic support can be added later via the anthropic SDK.
 """
 
+import json
 import logging
 from typing import AsyncGenerator
 
@@ -78,8 +79,17 @@ async def call_llm_streaming(
     messages: list[dict],
     temperature: float = 0.2,
     max_tokens: int = 4096,
+    tools: list[dict] | None = None,
+    tool_executor_fn=None,
 ) -> AsyncGenerator[str, None]:
     """Stream tokens from an LLM. Yields text chunks.
+
+    If tools are provided, handles function-calling loop:
+    LLM may return tool_calls → we execute them → feed results back → continue.
+
+    Args:
+        tools: OpenAI function-calling tool schemas
+        tool_executor_fn: async fn(tool_name, arguments) -> str
 
     Raises RuntimeError with a user-friendly message on failure.
     """
@@ -101,54 +111,107 @@ async def call_llm_streaming(
         )
 
     if provider == "anthropic":
-        # Use httpx directly for Anthropic streaming
         async for chunk in _call_anthropic_streaming(api_key, model, messages, temperature, max_tokens):
             yield chunk
         return
 
     if provider == "google_ai":
-        # Google AI uses a different API format
         async for chunk in _call_google_streaming(api_key, model, messages, temperature, max_tokens):
             yield chunk
         return
 
     # OpenAI-compatible providers (openai, groq, custom_openai)
     base_url = key_data.get("base_url") or PROVIDER_BASE_URLS.get(provider, "https://api.openai.com/v1")
-
     client = AsyncOpenAI(api_key=api_key, base_url=base_url)
 
-    logger.info("[llm] Calling %s with %d messages (model=%s, temp=%.1f, max_tokens=%d)",
-                provider, len(messages), model, temperature, max_tokens)
+    logger.info("[llm] Calling %s with %d messages, %d tools (model=%s, temp=%.1f)",
+                provider, len(messages), len(tools or []), model, temperature)
 
-    try:
-        stream = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stream=True,
-        )
+    # Tool-calling loop: LLM may return tool_calls multiple times
+    current_messages = list(messages)
+    max_tool_rounds = 5  # prevent infinite loops
 
-        token_count = 0
-        async for chunk in stream:
-            delta = chunk.choices[0].delta if chunk.choices else None
-            if delta and delta.content:
-                token_count += 1
-                yield delta.content
+    for round_num in range(max_tool_rounds + 1):
+        try:
+            create_kwargs = {
+                "model": model,
+                "messages": current_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
 
-        logger.info("[llm] LLM responded with ~%d chunks (model=%s)", token_count, model)
+            # Only pass tools on first call or when continuing tool loop
+            if tools and tool_executor_fn:
+                create_kwargs["tools"] = tools
+                create_kwargs["stream"] = False  # non-streaming for tool calls
 
-    except Exception as e:
-        error_msg = str(e)
-        logger.error("[llm] LLM call failed: model=%s error=%s", model, error_msg)
-        # Provide user-friendly error messages
-        if "401" in error_msg or "Incorrect API key" in error_msg:
-            raise RuntimeError(f"Invalid API key for {provider}. Check Settings -> API Keys.")
-        if "429" in error_msg:
-            raise RuntimeError(f"Rate limited by {provider}. Try again in a moment.")
-        if "model_not_found" in error_msg or "does not exist" in error_msg:
-            raise RuntimeError(f"Model '{model}' not available. Check your {provider} plan.")
-        raise RuntimeError(f"LLM call failed ({provider}): {error_msg[:200]}")
+                response = await client.chat.completions.create(**create_kwargs)
+                choice = response.choices[0]
+
+                # Check if LLM wants to call tools
+                if choice.finish_reason == "tool_calls" or (choice.message.tool_calls and len(choice.message.tool_calls) > 0):
+                    logger.info("[llm] LLM requested %d tool call(s) (round %d)",
+                                len(choice.message.tool_calls), round_num + 1)
+
+                    # Add assistant message with tool calls
+                    current_messages.append(choice.message.model_dump())
+
+                    # Execute each tool call
+                    for tc in choice.message.tool_calls:
+                        fn_name = tc.function.name
+                        try:
+                            fn_args = json.loads(tc.function.arguments)
+                        except json.JSONDecodeError:
+                            fn_args = {"input": tc.function.arguments}
+
+                        logger.info("[llm] Executing tool: %s(%s)", fn_name, json.dumps(fn_args)[:100])
+                        yield f"\n\n🔧 *Using {fn_name}...*\n\n"
+
+                        tool_result = await tool_executor_fn(fn_name, fn_args)
+
+                        current_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": tool_result,
+                        })
+
+                    # Continue loop — LLM will see tool results
+                    continue
+
+                # No tool calls — LLM produced a final text response
+                if choice.message.content:
+                    yield choice.message.content
+                logger.info("[llm] LLM responded with final text (round %d)", round_num + 1)
+                return
+
+            else:
+                # No tools — simple streaming
+                create_kwargs["stream"] = True
+                stream = await client.chat.completions.create(**create_kwargs)
+
+                token_count = 0
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if delta and delta.content:
+                        token_count += 1
+                        yield delta.content
+
+                logger.info("[llm] LLM responded with ~%d chunks (model=%s)", token_count, model)
+                return
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error("[llm] LLM call failed: model=%s error=%s", model, error_msg)
+            if "401" in error_msg or "Incorrect API key" in error_msg:
+                raise RuntimeError(f"Invalid API key for {provider}. Check Settings -> API Keys.")
+            if "429" in error_msg:
+                raise RuntimeError(f"Rate limited by {provider}. Try again in a moment.")
+            if "model_not_found" in error_msg or "does not exist" in error_msg:
+                raise RuntimeError(f"Model '{model}' not available. Check your {provider} plan.")
+            raise RuntimeError(f"LLM call failed ({provider}): {error_msg[:200]}")
+
+    logger.warning("[llm] Hit max tool rounds (%d), returning last output", max_tool_rounds)
+    yield "\n\n*Reached maximum tool usage limit.*"
 
 
 async def _call_anthropic_streaming(

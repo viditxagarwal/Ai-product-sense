@@ -9,9 +9,16 @@ import logging
 import traceback
 from datetime import datetime, timezone
 
+from functools import partial
+
 from app.database import supabase
 from app.services.llm_service import call_llm_streaming
 from app.services.prompt_injector import build_config_injections
+from app.services.tool_executor import (
+    build_openai_tools,
+    execute_tool_call,
+    fetch_tools_by_ids,
+)
 
 logger = logging.getLogger("ws.executor")
 
@@ -558,6 +565,20 @@ async def _execute_workflow_graph(
                 else:
                     node_messages.append({"role": "user", "content": user_message})
 
+            # ── Resolve bound tools for this node ────────────
+            bound_tool_ids = node_data.get("boundTools", [])
+            openai_tools = None
+            tool_exec_fn = None
+
+            if bound_tool_ids:
+                tool_records = fetch_tools_by_ids(bound_tool_ids)
+                if tool_records:
+                    openai_tools = build_openai_tools(tool_records)
+                    tool_exec_fn = partial(execute_tool_call, user_id=user_id)
+                    logger.info("[exec] Node '%s' has %d bound tools: %s",
+                                node_name, len(openai_tools),
+                                [t["function"]["name"] for t in openai_tools])
+
             # ── Call LLM ─────────────────────────────────────
             step_output = ""
             try:
@@ -567,6 +588,8 @@ async def _execute_workflow_graph(
                     messages=node_messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    tools=openai_tools,
+                    tool_executor_fn=tool_exec_fn,
                 ):
                     step_output += chunk
                     await send_event({
