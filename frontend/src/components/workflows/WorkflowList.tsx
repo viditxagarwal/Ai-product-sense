@@ -28,6 +28,8 @@ import {
 import { CardGridSkeleton } from "@/components/ui/skeletons";
 import { useWorkflowStore } from "@/stores/workflow-store";
 import { useDomainStore } from "@/stores/domain-store";
+import TemplatePicker from "./TemplatePicker";
+import type { WorkflowTemplate } from "./workflowTemplates";
 import type { WorkflowResponse } from "@/types";
 
 export default function WorkflowList() {
@@ -43,10 +45,18 @@ export default function WorkflowList() {
 
   const [filterDomain, setFilterDomain] = useState<string>("all");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newDomainId, setNewDomainId] = useState("");
   const [creating, setCreating] = useState(false);
+
+  // Pending workflow metadata (set in step 1, used after template pick)
+  const [pendingMeta, setPendingMeta] = useState<{
+    name: string;
+    desc: string;
+    domainId: string;
+  } | null>(null);
 
   useEffect(() => {
     fetchDomains();
@@ -60,19 +70,40 @@ export default function WorkflowList() {
     }
   }, [filterDomain, fetchWorkflows]);
 
-  const handleCreate = async () => {
+  // Step 1: user fills name/domain, clicks "Next" → opens template picker
+  const handleNext = () => {
     if (!newName.trim() || !newDomainId) return;
+    setPendingMeta({
+      name: newName.trim(),
+      desc: newDesc.trim(),
+      domainId: newDomainId,
+    });
+    setDialogOpen(false);
+    setTemplatePickerOpen(true);
+  };
+
+  // Step 2: user picks a template → create workflow with pre-wired graph
+  const handleTemplateSelect = async (template: WorkflowTemplate) => {
+    if (!pendingMeta) return;
+    setTemplatePickerOpen(false);
     setCreating(true);
     try {
+      const graph = template.graph();
       const wf = await createWorkflow({
-        domain_id: newDomainId,
-        workflow_name: newName.trim(),
-        description: newDesc.trim(),
+        domain_id: pendingMeta.domainId,
+        workflow_name: pendingMeta.name,
+        description: pendingMeta.desc,
+        template_source: template.id === "blank" ? undefined : template.label,
+        graph_data: {
+          nodes: graph.nodes as unknown as Record<string, unknown>[],
+          edges: graph.edges as unknown as Record<string, unknown>[],
+        },
       });
-      setDialogOpen(false);
+      // Reset form state
       setNewName("");
       setNewDesc("");
       setNewDomainId("");
+      setPendingMeta(null);
       router.push(`/workflows/${wf.id}`);
     } finally {
       setCreating(false);
@@ -100,16 +131,16 @@ export default function WorkflowList() {
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button>
+            <Button disabled={creating}>
               <Plus className="mr-1 size-4" />
-              New Workflow
+              {creating ? "Creating..." : "New Workflow"}
             </Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Create New Workflow</DialogTitle>
               <DialogDescription>
-                Create a workflow and assign it to a domain.
+                Name your workflow and assign it to a domain. You&apos;ll pick a pattern next.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-2">
@@ -151,15 +182,26 @@ export default function WorkflowList() {
                 Cancel
               </Button>
               <Button
-                onClick={handleCreate}
-                disabled={!newName.trim() || !newDomainId || creating}
+                onClick={handleNext}
+                disabled={!newName.trim() || !newDomainId}
               >
-                {creating ? "Creating..." : "Create"}
+                Next: Pick Pattern
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>
+
+      {/* Template picker dialog (step 2) */}
+      <TemplatePicker
+        open={templatePickerOpen}
+        onOpenChange={(open) => {
+          setTemplatePickerOpen(open);
+          if (!open) setPendingMeta(null);
+        }}
+        onSelect={handleTemplateSelect}
+        mode="create"
+      />
 
       {/* Domain filter */}
       <div className="flex items-center gap-2">

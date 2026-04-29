@@ -1,7 +1,6 @@
 "use client";
 
 import { NODE_TYPE_CONFIGS } from "./nodeTypes";
-import { ListOrdered } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -9,31 +8,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-export interface WorkflowTemplate {
-  id: string;
-  label: string;
-  description: string;
-  icon: typeof ListOrdered;
-  color: string;
-}
-
-export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
-  {
-    id: "plan_and_execute",
-    label: "Plan & Execute",
-    description:
-      "Planner breaks task into steps, Executor iterates through them with a loopback, then Synthesize merges results. All nodes are regular — bind tools, set models, etc.",
-    icon: ListOrdered,
-    color: "bg-indigo-500",
-  },
-];
-
 interface NodeToolbarProps {
   onAddNode: (nodeType: string) => void;
-  onAddTemplate?: (templateId: string) => void;
 }
 
-export default function NodeToolbar({ onAddNode, onAddTemplate }: NodeToolbarProps) {
+export default function NodeToolbar({ onAddNode }: NodeToolbarProps) {
   const onDragStart = (
     event: React.DragEvent<HTMLDivElement>,
     nodeType: string
@@ -81,40 +60,6 @@ export default function NodeToolbar({ onAddNode, onAddTemplate }: NodeToolbarPro
               </Tooltip>
             );
           })}
-
-          {/* Templates section */}
-          {onAddTemplate && WORKFLOW_TEMPLATES.length > 0 && (
-            <>
-              <div className="pb-0.5 pt-3">
-                <h4 className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                  Patterns
-                </h4>
-              </div>
-              {WORKFLOW_TEMPLATES.map((tpl) => {
-                const Icon = tpl.icon;
-                return (
-                  <Tooltip key={tpl.id}>
-                    <TooltipTrigger asChild>
-                      <div
-                        onClick={() => onAddTemplate(tpl.id)}
-                        className="flex cursor-pointer items-center gap-2.5 rounded-md border border-dashed border-indigo-300 bg-indigo-50/50 px-3 py-2 text-xs font-medium transition-colors hover:bg-indigo-50"
-                      >
-                        <div
-                          className={`flex size-6 items-center justify-center rounded ${tpl.color}`}
-                        >
-                          <Icon className="size-3.5 text-white" />
-                        </div>
-                        <span className="text-indigo-700">{tpl.label}</span>
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent side="right" className="max-w-[240px] text-xs">
-                      {tpl.description}
-                    </TooltipContent>
-                  </Tooltip>
-                );
-              })}
-            </>
-          )}
         </div>
         <div className="border-t border-slate-200 p-2">
           <p className="text-[10px] text-slate-400">

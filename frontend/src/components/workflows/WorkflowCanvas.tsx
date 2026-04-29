@@ -18,7 +18,7 @@ import {
   type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ArrowLeft, Save, Check } from "lucide-react";
+import { ArrowLeft, Save, Check, LayoutGrid } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,6 +49,8 @@ import DeletableEdge from "./CustomEdge";
 import LoopbackEdge from "./LoopbackEdge";
 import type { LoopbackEdgeData } from "./LoopbackEdge";
 import { NODE_TYPE_MAP } from "./nodeTypes";
+import TemplatePicker from "./TemplatePicker";
+import type { WorkflowTemplate } from "./workflowTemplates";
 import type { WorkflowNodeData } from "./CustomNodes/WorkflowNode";
 
 interface WorkflowCanvasProps {
@@ -154,6 +156,7 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
     x: number;
     y: number;
   } | null>(null);
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
 
   const nodeTypes: NodeTypes = useMemo(
     () => ({
@@ -556,132 +559,24 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
     [setNodes]
   );
 
-  // ─── Template: add pre-wired pattern ───
-  const handleAddTemplate = useCallback(
-    (templateId: string) => {
-      if (templateId !== "plan_and_execute") return;
-
-      const ts = Date.now();
-      const baseX = 300;
-      const baseY = 100;
-      const yGap = 160;
-
-      const plannerId = `step_planner_${ts}`;
-      const executorId = `step_executor_${ts}`;
-      const decisionId = `decision_complete_${ts}`;
-      const synthesizeId = `step_synthesize_${ts}`;
-
-      const templateNodes: Node[] = [
-        {
-          id: plannerId,
-          type: "step",
-          position: { x: baseX, y: baseY },
-          data: {
-            label: "Planner",
-            nodeType: "step",
-            purpose: "Break the task into sequential steps",
-            systemPromptHint:
-              "This node's system prompt should instruct the LLM to break the task into numbered steps. The plan becomes the state that the Executor iterates through.",
-            boundTools: [],
-            onMissingData: "flag",
-            onToolFailure: "retry",
-            onLowConfidence: "proceed",
-          },
-        },
-        {
-          id: executorId,
-          type: "step",
-          position: { x: baseX, y: baseY + yGap },
-          data: {
-            label: "Executor",
-            nodeType: "step",
-            purpose: "Execute the current step from the plan",
-            boundTools: [],
-            onMissingData: "flag",
-            onToolFailure: "retry",
-            onLowConfidence: "proceed",
-          },
-        },
-        {
-          id: decisionId,
-          type: "decision",
-          position: { x: baseX, y: baseY + yGap * 2 },
-          data: {
-            label: "All Steps Complete?",
-            nodeType: "decision",
-            purpose: "Check if all steps in the plan have been executed",
-            conditionType: "rule_based",
-            conditionPrompt: "steps_remaining === 0",
-            pathMappings: "true → Synthesize\nfalse → Executor",
-            boundTools: [],
-          },
-        },
-        {
-          id: synthesizeId,
-          type: "step",
-          position: { x: baseX, y: baseY + yGap * 3 },
-          data: {
-            label: "Synthesize",
-            nodeType: "step",
-            purpose: "Merge all step outputs into a final result",
-            boundTools: [],
-            onMissingData: "flag",
-            onToolFailure: "retry",
-            onLowConfidence: "proceed",
-          },
-        },
-      ];
-
-      const templateEdges: Edge[] = [
-        // Planner → Executor
-        {
-          id: `e-${plannerId}-${executorId}-${ts}`,
-          source: plannerId,
-          target: executorId,
-          type: "deletable",
-          animated: true,
-          style: { strokeWidth: 2 },
-        },
-        // Executor → Decision
-        {
-          id: `e-${executorId}-${decisionId}-${ts}`,
-          source: executorId,
-          target: decisionId,
-          type: "deletable",
-          animated: true,
-          style: { strokeWidth: 2 },
-        },
-        // Decision → Synthesize (exit path)
-        {
-          id: `e-${decisionId}-${synthesizeId}-${ts}`,
-          source: decisionId,
-          target: synthesizeId,
-          type: "deletable",
-          animated: true,
-          style: { strokeWidth: 2 },
-        },
-        // Loopback: Decision → Executor (loop while steps remaining)
-        {
-          id: `loopback-${decisionId}-${executorId}-${ts}`,
-          source: decisionId,
-          target: executorId,
-          type: "loopback",
-          animated: false,
-          data: {
-            label: "Steps remaining",
-            loopCondition: "max_iterations",
-            maxIterations: 10,
-            exitThreshold: 1.0,
-            exitNodeId: synthesizeId,
-          } as LoopbackEdgeData,
-        },
-      ];
-
-      setNodes((nds) => [...nds, ...templateNodes]);
-      setEdges((eds) => [...eds, ...templateEdges]);
-      setEntryPoint(plannerId);
+  // ─── Template: insert pre-wired pattern into canvas ───
+  const handleInsertTemplate = useCallback(
+    (template: WorkflowTemplate) => {
+      const graph = template.graph();
+      setNodes((nds) => [...nds, ...graph.nodes]);
+      setEdges((eds) => [
+        ...eds,
+        ...graph.edges.map((e) => ({
+          ...e,
+          type: e.type === "loopback" ? "loopback" : "deletable",
+        })),
+      ]);
+      if (!entryRef.current && graph.entryPoint) {
+        setEntryPoint(graph.entryPoint);
+      }
+      setTemplatePickerOpen(false);
       toast.success(
-        "Plan & Execute pattern added. All nodes are regular — customize tools, models, and prompts."
+        `${template.label} pattern added. Customize nodes, tools, and prompts.`
       );
     },
     [setNodes, setEdges]
@@ -839,6 +734,15 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
             </Select>
           </div>
 
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setTemplatePickerOpen(true)}
+          >
+            <LayoutGrid className="mr-1 size-4" />
+            Templates
+          </Button>
+
           <Button size="sm" onClick={performSave} disabled={saveStatus === "saving"}>
             {saveStatus === "saving" ? (
               <>Saving...</>
@@ -863,7 +767,7 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
 
       {/* Three-panel layout */}
       <div className="flex flex-1 overflow-hidden">
-        <NodeToolbar onAddNode={handleAddNode} onAddTemplate={handleAddTemplate} />
+        <NodeToolbar onAddNode={handleAddNode} />
 
         {/* Canvas wrapper with keyboard handler */}
         <div
@@ -961,6 +865,14 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Template Picker (insert mode from canvas) */}
+      <TemplatePicker
+        open={templatePickerOpen}
+        onOpenChange={setTemplatePickerOpen}
+        onSelect={handleInsertTemplate}
+        mode="insert"
+      />
 
       {/* Right-click Context Menu */}
       {contextMenu && (

@@ -82,6 +82,7 @@ export interface WorkflowCreate {
   description?: string;
   graph_data?: GraphData;
   error_handling_strategy?: ErrorHandlingStrategy;
+  template_source?: string;
 }
 
 export interface WorkflowUpdate {
