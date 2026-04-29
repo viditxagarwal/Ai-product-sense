@@ -13,6 +13,39 @@ import type { ThreadMessage, ThreadFile, ExecutionStep } from "@/types";
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/api/v1";
 const ACCEPTED_TYPES = ".pdf,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg";
 
+// ── Debug logger ─────────────────────────────────────────────
+type DebugEntry = { ts: string; level: "info" | "warn" | "error"; msg: string };
+const MAX_DEBUG_ENTRIES = 200;
+let _debugLog: DebugEntry[] = [];
+let _debugListeners: Set<() => void> = new Set();
+
+function wsLog(level: DebugEntry["level"], msg: string) {
+  const ts = new Date().toISOString().slice(11, 23);
+  const entry = { ts, level, msg };
+  _debugLog = [..._debugLog.slice(-(MAX_DEBUG_ENTRIES - 1)), entry];
+  _debugListeners.forEach((fn) => fn());
+  const consoleFn = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
+  consoleFn(`[WS ${ts}] ${msg}`);
+}
+
+/** Subscribe to debug log changes. Returns unsubscribe function. */
+export function useWsDebugLog() {
+  const [log, setLog] = useState<DebugEntry[]>(_debugLog);
+  const subRef = useRef<() => void>();
+  if (!subRef.current) {
+    const update = () => setLog([..._debugLog]);
+    _debugListeners.add(update);
+    subRef.current = update;
+  }
+  // Cleanup handled by the debug panel itself
+  return log;
+}
+
+export function clearWsDebugLog() {
+  _debugLog = [];
+  _debugListeners.forEach((fn) => fn());
+}
+
 export default function ChatInput() {
   const { activeThreadId, selectedStepId, setSelectedStepId } = useWorkspaceStore();
   const { inspectorSteps } = useExecutionStore();
@@ -48,31 +81,46 @@ export default function ChatInput() {
       if (!activeThreadId) return;
 
       const token = getStoredToken();
+      wsLog(token ? "info" : "error", `Token: ${token ? `${token.slice(0, 20)}...` : "MISSING — getStoredToken() returned null"}`);
 
       const wsUrl = `${WS_BASE}/threads/${activeThreadId}/stream${
         token ? `?token=${token}` : ""
       }`;
+      wsLog("info", `Connecting to ${wsUrl.replace(/token=.*/, "token=<redacted>")}`);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        wsLog("info", "WebSocket OPEN");
         clearActiveRun();
         setStreaming(true);
         setWsDisconnected(false);
         reconnectAttemptRef.current = 0;
-        ws.send(JSON.stringify({ type: "start_run", message: messageText }));
+        const payload = { type: "start_run", message: messageText };
+        wsLog("info", `Sending: ${JSON.stringify(payload).slice(0, 200)}`);
+        ws.send(JSON.stringify(payload));
       };
 
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          const eventType = data.type || "unknown";
+          if (eventType === "error") {
+            wsLog("error", `Server error: ${data.message || JSON.stringify(data)}`);
+          } else if (eventType === "step_progress") {
+            wsLog("info", `Event: ${eventType} step=${data.step_id?.slice(0, 8)}`);
+          } else {
+            wsLog("info", `Event: ${eventType} ${JSON.stringify(data).slice(0, 150)}`);
+          }
           handleWsEvent(data);
-        } catch {
-          // ignore malformed messages
+        } catch (e) {
+          wsLog("warn", `Failed to parse WS message: ${String(event.data).slice(0, 200)}`);
         }
       };
 
       ws.onclose = (event) => {
+        wsLog(event.code === 1000 ? "info" : "warn",
+          `WebSocket CLOSED code=${event.code} reason="${event.reason || "none"}" wasClean=${event.wasClean}`);
         wsRef.current = null;
         // Only show disconnection if we were still streaming (unexpected close)
         if (isStreaming && event.code !== 1000) {
@@ -81,12 +129,13 @@ export default function ChatInput() {
           if (attempt < 5) {
             const delay = Math.min(1000 * Math.pow(2, attempt), 16000);
             reconnectAttemptRef.current = attempt + 1;
+            wsLog("warn", `Reconnecting in ${delay}ms (attempt ${attempt + 1}/5)`);
             setTimeout(() => {
-              // Reconnect WS only — do NOT re-create user message or trace
               const msg = pendingMessageRef.current;
               if (msg) connectWs(msg);
             }, delay);
           } else {
+            wsLog("error", "Max reconnect attempts (5) reached. Giving up.");
             setStreaming(false);
             pendingMessageRef.current = null;
           }
@@ -96,8 +145,8 @@ export default function ChatInput() {
         }
       };
 
-      ws.onerror = () => {
-        // onclose will fire after onerror
+      ws.onerror = (err) => {
+        wsLog("error", `WebSocket ERROR event fired (details in browser devtools Network tab)`);
       };
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

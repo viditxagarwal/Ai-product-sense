@@ -1,9 +1,24 @@
+import logging
+import sys
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.config import CORS_ORIGINS
+
+# ── Logging setup ────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    stream=sys.stdout,
+)
+# WebSocket + execution loggers default to INFO; set DEBUG for more detail
+logging.getLogger("ws").setLevel(logging.DEBUG)
+logging.getLogger("ws.stream").setLevel(logging.DEBUG)
+logging.getLogger("ws.execution").setLevel(logging.INFO)
 from app.routers import (
     api_keys,
     auth,
@@ -53,3 +68,33 @@ app.include_router(api_keys.router, prefix=API_PREFIX)
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.get("/api/v1/debug/status")
+async def debug_status():
+    """Diagnostic endpoint — shows config, DB connectivity, and active WS runs."""
+    from app.routers.stream import _active_runs
+    from app.database import supabase as db
+
+    checks: dict = {"server": "ok", "cors_origins": CORS_ORIGINS}
+
+    # DB connectivity
+    try:
+        result = db.table("threads").select("id", count="exact").limit(0).execute()
+        checks["database"] = "ok"
+        checks["thread_count"] = result.count
+    except Exception as e:
+        checks["database"] = f"error: {e}"
+
+    # Active WebSocket runs
+    checks["active_ws_runs"] = {
+        tid: "running" if not task.done() else "done"
+        for tid, task in _active_runs.items()
+    }
+
+    # Environment sanity
+    from app.config import SUPABASE_URL, SUPABASE_JWT_SECRET
+    checks["supabase_url"] = SUPABASE_URL[:40] + "..." if SUPABASE_URL else "MISSING"
+    checks["jwt_secret_set"] = bool(SUPABASE_JWT_SECRET)
+
+    return checks

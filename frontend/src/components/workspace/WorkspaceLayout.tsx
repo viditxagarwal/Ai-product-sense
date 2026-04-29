@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import LeftPanel from "./LeftPanel";
 import CenterPanel from "./CenterPanel";
 import RightPanel from "./RightPanel";
+import DebugPanel from "./DebugPanel";
 
 function useMediaQuery(query: string) {
   const [matches, setMatches] = useState(false);
@@ -176,6 +177,9 @@ export default function WorkspaceLayout() {
           </div>
         )}
       </div>
+
+      {/* Debug panel (floating) */}
+      <DebugPanel />
     </div>
   );
 }

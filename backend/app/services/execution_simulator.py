@@ -10,12 +10,16 @@ v2: Creates realistic Excel DCF models and markdown summaries.
 
 import asyncio
 import io
+import logging
 import random
 import re
+import traceback
 import uuid
 from datetime import datetime, timezone
 
 import openpyxl
+
+logger = logging.getLogger("ws.execution")
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 from app.database import supabase
@@ -678,22 +682,41 @@ def _get_nodes_in_order(graph_data: dict) -> list[dict]:
 
 async def simulate_execution(thread_id: str, user_message: str, send_event):
     """Run the simulation. send_event is an async callable that sends a dict to the WebSocket."""
+    logger.info("[exec] Starting simulation: thread=%s message='%s'", thread_id, user_message[:100])
 
     # Fetch thread + workflow
-    thread = supabase.table("threads").select("*").eq("id", thread_id).single().execute()
+    try:
+        thread = supabase.table("threads").select("*").eq("id", thread_id).single().execute()
+    except Exception as e:
+        logger.error("[exec] Failed to fetch thread %s: %s", thread_id, e)
+        await send_event({"type": "error", "message": f"Failed to fetch thread: {e}"})
+        return
+
     if not thread.data:
+        logger.error("[exec] Thread not found: %s", thread_id)
         await send_event({"type": "error", "message": "Thread not found"})
         return
 
-    workflow = supabase.table("workflows").select("*").eq("id", thread.data["workflow_id"]).single().execute()
+    logger.info("[exec] Thread found: workflow_id=%s", thread.data.get("workflow_id"))
+
+    try:
+        workflow = supabase.table("workflows").select("*").eq("id", thread.data["workflow_id"]).single().execute()
+    except Exception as e:
+        logger.error("[exec] Failed to fetch workflow: %s", e)
+        await send_event({"type": "error", "message": f"Failed to fetch workflow: {e}"})
+        return
+
     if not workflow.data:
+        logger.error("[exec] Workflow not found: %s", thread.data["workflow_id"])
         await send_event({"type": "error", "message": "Workflow not found"})
         return
 
     graph_data = workflow.data.get("graph_data", {})
     nodes = _get_nodes_in_order(graph_data)
+    logger.info("[exec] Graph has %d nodes, %d edges", len(graph_data.get("nodes", [])), len(graph_data.get("edges", [])))
 
     if not nodes:
+        logger.info("[exec] No nodes in graph, using default agent node")
         nodes = [{"id": "default", "type": "agent_node", "data": {"label": "Default Agent"}}]
 
     # Check for existing files and determine user intent
@@ -708,11 +731,18 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
     }
 
     # Create execution run (user message already created by frontend via REST API)
-    run = supabase.table("execution_runs").insert({
-        "thread_id": thread_id,
-        "status": "running",
-    }).execute()
+    logger.info("[exec] Creating execution run for thread=%s", thread_id)
+    try:
+        run = supabase.table("execution_runs").insert({
+            "thread_id": thread_id,
+            "status": "running",
+        }).execute()
+    except Exception as e:
+        logger.error("[exec] Failed to create execution run: %s\n%s", e, traceback.format_exc())
+        await send_event({"type": "run_failed", "run_id": "", "error": f"Failed to create run: {e}"})
+        return
     run_id = run.data[0]["id"]
+    logger.info("[exec] Run created: run_id=%s", run_id)
 
     await send_event({
         "type": "run_started",
@@ -731,6 +761,8 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
             node_type = node.get("type", "agent_node")
             node_name = node.get("data", {}).get("label", node_type)
             step_number = i + 1
+
+            logger.info("[exec] Step %d/%d: type=%s name='%s'", step_number, len(nodes), node_type, node_name)
 
             # Create step record
             step = supabase.table("execution_steps").insert({
@@ -874,7 +906,10 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
             "files": created_files,
         })
 
+        logger.info("[exec] Run completed: run_id=%s duration=%dms tokens=%d", run_id, total_duration, total_tokens)
+
     except asyncio.CancelledError:
+        logger.info("[exec] Run cancelled: run_id=%s", run_id)
         supabase.table("execution_runs").update({
             "status": "cancelled",
             "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -882,6 +917,7 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
         await send_event({"type": "run_failed", "run_id": run_id, "error": "Execution cancelled"})
 
     except Exception as e:
+        logger.error("[exec] Run FAILED: run_id=%s error=%s\n%s", run_id, e, traceback.format_exc())
         supabase.table("execution_runs").update({
             "status": "failed",
             "completed_at": datetime.now(timezone.utc).isoformat(),
