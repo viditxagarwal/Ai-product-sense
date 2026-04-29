@@ -20,6 +20,7 @@ import {
   X,
   Sun,
   Moon,
+  Key,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
@@ -133,8 +134,21 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
         })}
       </nav>
 
-      {/* Theme toggle + User + sign out */}
+      {/* Settings + Theme toggle + User + sign out */}
       <div className="border-t border-slate-800 px-2 py-2">
+        <Link
+          href="/settings/api-keys"
+          className={cn(
+            "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
+            pathname.startsWith("/settings")
+              ? "bg-slate-800 text-white"
+              : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200"
+          )}
+          title={collapsed ? "Settings" : undefined}
+        >
+          <Key className="size-4 shrink-0" />
+          {!collapsed && <span>Settings</span>}
+        </Link>
         <button
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
           className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800/60 hover:text-slate-200"

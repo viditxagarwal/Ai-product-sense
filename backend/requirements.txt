@@ -7,4 +7,6 @@ python-multipart
 PyJWT[crypto]>=2.0
 slowapi>=0.1.9
 openpyxl>=3.1.0
+cryptography>=41.0
+httpx>=0.25
 

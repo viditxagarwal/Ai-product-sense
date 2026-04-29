@@ -5,6 +5,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.config import CORS_ORIGINS
 from app.routers import (
+    api_keys,
     auth,
     configurations,
     domains,
@@ -46,6 +47,7 @@ app.include_router(threads.router, prefix=API_PREFIX)
 app.include_router(executions.router, prefix=API_PREFIX)
 app.include_router(file_changes.router, prefix=API_PREFIX)
 app.include_router(stream.router, prefix=API_PREFIX)
+app.include_router(api_keys.router, prefix=API_PREFIX)
 
 
 @app.get("/health")
