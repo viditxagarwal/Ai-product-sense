@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bug, X, Trash2, ChevronDown, ChevronUp, Activity, ExternalLink } from "lucide-react";
+import { Bug, X, Trash2, Activity } from "lucide-react";
 import { useWsDebugLog, clearWsDebugLog } from "./ChatInput";
 import { cn } from "@/lib/utils";
 

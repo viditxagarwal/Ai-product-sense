@@ -17,7 +17,7 @@ const ACCEPTED_TYPES = ".pdf,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg";
 type DebugEntry = { ts: string; level: "info" | "warn" | "error"; msg: string };
 const MAX_DEBUG_ENTRIES = 200;
 let _debugLog: DebugEntry[] = [];
-let _debugListeners: Set<() => void> = new Set();
+const _debugListeners: Set<() => void> = new Set();
 
 function wsLog(level: DebugEntry["level"], msg: string) {
   const ts = new Date().toISOString().slice(11, 23);
@@ -113,7 +113,7 @@ export default function ChatInput() {
             wsLog("info", `Event: ${eventType} ${JSON.stringify(data).slice(0, 150)}`);
           }
           handleWsEvent(data);
-        } catch (e) {
+        } catch {
           wsLog("warn", `Failed to parse WS message: ${String(event.data).slice(0, 200)}`);
         }
       };
@@ -145,7 +145,7 @@ export default function ChatInput() {
         }
       };
 
-      ws.onerror = (err) => {
+      ws.onerror = () => {
         wsLog("error", `WebSocket ERROR event fired (details in browser devtools Network tab)`);
       };
     },
