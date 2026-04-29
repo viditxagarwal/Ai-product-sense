@@ -12,6 +12,13 @@ interface NodeToolbarProps {
   onAddNode: (nodeType: string) => void;
 }
 
+// Component color previews for drag
+const DRAG_COLORS: Record<string, string> = {
+  node: "border-blue-400 text-blue-700",
+  gate: "border-amber-400 text-amber-700",
+  split: "border-purple-400 text-purple-700",
+};
+
 export default function NodeToolbar({ onAddNode }: NodeToolbarProps) {
   const onDragStart = (
     event: React.DragEvent<HTMLDivElement>,
@@ -26,12 +33,13 @@ export default function NodeToolbar({ onAddNode }: NodeToolbarProps) {
       <div className="flex w-48 shrink-0 flex-col border-r border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-3 py-2">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Node Types
+            Components
           </h3>
         </div>
         <div className="flex-1 space-y-1 overflow-y-auto p-2">
           {NODE_TYPE_CONFIGS.map((config) => {
             const Icon = config.icon;
+            const dragClass = DRAG_COLORS[config.type] || "";
             return (
               <Tooltip key={config.type}>
                 <TooltipTrigger asChild>
@@ -39,7 +47,7 @@ export default function NodeToolbar({ onAddNode }: NodeToolbarProps) {
                     draggable
                     onDragStart={(e) => onDragStart(e, config.type)}
                     onClick={() => onAddNode(config.type)}
-                    className={`flex cursor-grab items-center gap-2.5 rounded-md border border-slate-200 px-3 py-2.5 text-xs font-medium transition-colors hover:bg-slate-50 active:cursor-grabbing ${config.textColor}`}
+                    className={`flex cursor-grab items-center gap-2.5 rounded-md border px-3 py-2.5 text-xs font-medium transition-colors hover:bg-slate-50 active:cursor-grabbing ${dragClass || "border-slate-200 text-slate-700"}`}
                   >
                     <div
                       className={`flex size-7 shrink-0 items-center justify-center rounded ${config.color}`}

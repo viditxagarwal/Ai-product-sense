@@ -22,6 +22,12 @@ interface TraceStepProps {
 
 // ── Node type color map ──────────────────────────────────────
 const NODE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  // New types (canvas revamp)
+  node:             { bg: "bg-blue-50",    text: "text-blue-600",    border: "border-blue-200" },
+  gate:             { bg: "bg-amber-50",   text: "text-amber-600",   border: "border-amber-200" },
+  split:            { bg: "bg-purple-50",  text: "text-purple-600",  border: "border-purple-200" },
+  start:            { bg: "bg-gray-50",    text: "text-gray-500",    border: "border-gray-200" },
+  // Old types (backward compat — old execution records)
   route:            { bg: "bg-orange-50",  text: "text-orange-600",  border: "border-orange-200" },
   retriever:        { bg: "bg-emerald-50", text: "text-emerald-600", border: "border-emerald-200" },
   calculator:       { bg: "bg-blue-50",    text: "text-blue-600",    border: "border-blue-200" },
@@ -34,6 +40,7 @@ const NODE_COLORS: Record<string, { bg: string; text: string; border: string }> 
   parallelization:  { bg: "bg-cyan-50",    text: "text-cyan-600",    border: "border-cyan-200" },
   loop:             { bg: "bg-violet-50",  text: "text-violet-600",  border: "border-violet-200" },
   human_review:     { bg: "bg-teal-50",    text: "text-teal-600",    border: "border-teal-200" },
+  human_checkpoint: { bg: "bg-teal-50",    text: "text-teal-600",    border: "border-teal-200" },
   end:              { bg: "bg-gray-50",    text: "text-gray-500",    border: "border-gray-200" },
   step:             { bg: "bg-blue-50",    text: "text-blue-600",    border: "border-blue-200" },
   decision:         { bg: "bg-orange-50",  text: "text-orange-600",  border: "border-orange-200" },

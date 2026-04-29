@@ -26,6 +26,12 @@ interface InspectorNodeProps {
 
 // Node type left bar colors
 const NODE_BAR: Record<string, string> = {
+  // New types (canvas revamp)
+  node: "bg-blue-400",
+  gate: "bg-amber-400",
+  split: "bg-purple-400",
+  start: "bg-gray-400",
+  // Old types (backward compat)
   route: "bg-orange-400",
   retriever: "bg-emerald-400",
   calculator: "bg-blue-400",
@@ -38,7 +44,12 @@ const NODE_BAR: Record<string, string> = {
   parallelization: "bg-cyan-400",
   loop: "bg-violet-400",
   human_review: "bg-teal-400",
+  human_checkpoint: "bg-teal-400",
   end: "bg-gray-300",
+  step: "bg-blue-400",
+  decision: "bg-orange-400",
+  parallel: "bg-cyan-400",
+  direct_llm: "bg-violet-400",
 };
 
 const FILE_OP_CONFIG: Record<

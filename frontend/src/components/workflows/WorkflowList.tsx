@@ -146,7 +146,8 @@ export default function WorkflowList() {
   };
 
   const getNodeCount = (wf: WorkflowResponse) => {
-    return wf.graph_data?.nodes?.length || 0;
+    const nodes = wf.graph_data?.nodes || [];
+    return nodes.filter((n: Record<string, unknown>) => !["start", "end"].includes(n.type as string)).length;
   };
 
   return (

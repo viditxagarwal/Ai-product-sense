@@ -9,7 +9,6 @@ import {
   Background,
   BackgroundVariant,
   Panel,
-  addEdge,
   useNodesState,
   useEdgesState,
   useReactFlow,
@@ -67,14 +66,18 @@ import NodeToolbar from "./NodeToolbar";
 import NodeInspector from "./NodeInspector";
 import EdgeInspector from "./EdgeInspector";
 import WorkflowNode from "./CustomNodes/WorkflowNode";
+import StartEndNode from "./CustomNodes/StartEndNode";
+import GateNode from "./CustomNodes/GateNode";
+import SplitNode from "./CustomNodes/SplitNode";
 import DeletableEdge from "./CustomEdge";
 import LoopbackEdge from "./LoopbackEdge";
+import SmartEdge from "./CustomEdges/SmartEdge";
 import type { LoopbackEdgeData } from "./LoopbackEdge";
-import { NODE_TYPE_MAP } from "./nodeTypes";
 import TemplatePicker from "./TemplatePicker";
 import ReActOnboarding from "./ReActOnboarding";
 import type { WorkflowTemplate } from "./workflowTemplates";
-import type { WorkflowNodeData } from "./CustomNodes/WorkflowNode";
+import type { WorkflowNodeData, WorkflowEdgeData } from "@/types";
+import { migrateWorkflowData } from "@/lib/workflow-migration";
 
 interface WorkflowCanvasProps {
   workflowId: string;
@@ -87,47 +90,6 @@ function isLoopback(sourceId: string, targetId: string, nodes: Node[]): boolean 
   const targetNode = nodes.find((n) => n.id === targetId);
   if (!sourceNode || !targetNode) return false;
   return targetNode.position.y < sourceNode.position.y;
-}
-
-function migrateLoopNodes(
-  loadedNodes: Node[],
-  loadedEdges: Edge[]
-): { nodes: Node[]; edges: Edge[] } {
-  const loopNodes = loadedNodes.filter(
-    (n) => n.type === "loop" || (n.data as WorkflowNodeData)?.nodeType === "loop"
-  );
-  if (loopNodes.length === 0) return { nodes: loadedNodes, edges: loadedEdges };
-
-  let migratedNodes = [...loadedNodes];
-  let migratedEdges = [...loadedEdges];
-
-  for (const loopNode of loopNodes) {
-    const incoming = migratedEdges.filter((e) => e.target === loopNode.id);
-    const outgoing = migratedEdges.filter((e) => e.source === loopNode.id);
-    migratedNodes = migratedNodes.filter((n) => n.id !== loopNode.id);
-    migratedEdges = migratedEdges.filter(
-      (e) => e.source !== loopNode.id && e.target !== loopNode.id
-    );
-    if (incoming.length > 0 && outgoing.length > 0) {
-      const sourceId = incoming[0].source;
-      const targetId = outgoing[0].target;
-      migratedEdges.push({
-        id: `loopback-${sourceId}-${targetId}-${Date.now()}`,
-        source: sourceId,
-        target: targetId,
-        type: "loopback",
-        animated: false,
-        data: {
-          label: "Loop",
-          loopCondition: "quality_threshold",
-          maxIterations: 3,
-          exitThreshold: 0.85,
-          exitNodeId: "",
-        },
-      });
-    }
-  }
-  return { nodes: migratedNodes, edges: migratedEdges };
 }
 
 // ─── Auto-layout with Dagre ───
@@ -278,27 +240,35 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
 
   const nodeTypes: NodeTypes = useMemo(
     () => ({
+      // New types (primary)
+      node: WorkflowNode,
+      gate: GateNode,
+      split: SplitNode,
+      start: StartEndNode,
+      end: StartEndNode,
+      // Old types (aliases for backward compat)
       step: WorkflowNode,
       decision: WorkflowNode,
-      parallel: WorkflowNode,
-      human_review: WorkflowNode,
-      retriever: WorkflowNode,
+      parallel: SplitNode,
+      human_review: GateNode,
       agent_node: WorkflowNode,
       route: WorkflowNode,
-      parallelization: WorkflowNode,
-      loop: WorkflowNode,
-      plan_and_execute: WorkflowNode,
-      human_checkpoint: WorkflowNode,
+      parallelization: SplitNode,
+      human_checkpoint: GateNode,
+      retriever: WorkflowNode,
       classifier: WorkflowNode,
       validator: WorkflowNode,
+      loop: WorkflowNode,
+      plan_and_execute: WorkflowNode,
     }),
     []
   );
 
   const edgeTypes: EdgeTypes = useMemo(
     () => ({
-      deletable: DeletableEdge,
-      loopback: LoopbackEdge,
+      smart: SmartEdge,       // New unified edge
+      deletable: DeletableEdge, // Old alias
+      loopback: LoopbackEdge,   // Old alias
     }),
     []
   );
@@ -310,30 +280,37 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
     fetchWorkflow(workflowId);
   }, [workflowId, fetchWorkflow]);
 
-  // Load graph data
+  // Load graph data with migration
   useEffect(() => {
     if (!currentWorkflow) return;
     setWorkflowName(currentWorkflow.workflow_name);
-    setEntryPoint(currentWorkflow.entry_point || "");
-    setExitPoint(currentWorkflow.exit_point || "");
 
     const gd = currentWorkflow.graph_data;
-    let loadedNodes = (gd?.nodes || []) as Node[];
-    let loadedEdges = (gd?.edges || []) as Edge[];
+    const migrationResult = migrateWorkflowData(gd as unknown as Record<string, unknown>);
 
-    const migrated = migrateLoopNodes(loadedNodes, loadedEdges);
-    loadedNodes = migrated.nodes;
-    loadedEdges = migrated.edges;
-
-    loadedEdges = loadedEdges.map((e) => ({
-      ...e,
-      type: e.type === "loopback" ? "loopback" : "deletable",
-    }));
+    setEntryPoint(migrationResult.startNodeId || currentWorkflow.entry_point || "");
+    setExitPoint(migrationResult.endNodeId || currentWorkflow.exit_point || "");
 
     skipHistoryRef.current = true;
-    setNodes(loadedNodes);
-    setEdges(loadedEdges);
-  }, [currentWorkflow, setNodes, setEdges]);
+    setNodes(migrationResult.nodes);
+    setEdges(migrationResult.edges);
+
+    // Auto-save migrated data back to prevent re-migration
+    if (migrationResult.migrated) {
+      console.log("[Migration] Workflow migrated to new format, auto-saving...");
+      toast.success("Workflow upgraded to new format.");
+      setTimeout(() => {
+        updateWorkflow(currentWorkflow.id, {
+          entry_point: migrationResult.startNodeId,
+          exit_point: migrationResult.endNodeId,
+          graph_data: {
+            nodes: migrationResult.nodes as unknown as Record<string, unknown>[],
+            edges: migrationResult.edges as unknown as Record<string, unknown>[],
+          },
+        }).catch(() => console.warn("[Migration] Auto-save failed"));
+      }, 500);
+    }
+  }, [currentWorkflow, setNodes, setEdges, updateWorkflow]);
 
   const scheduleSave = useCallback(() => {
     dirtyRef.current = true;
@@ -396,42 +373,74 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
     };
   }, []);
 
-  // ─── Connection handler ───
+  // ─── Connection handler with smart edge auto-detection ───
   const onConnect = useCallback(
     (connection: Connection) => {
       if (!connection.source || !connection.target) return;
+
+      // Connection validation
+      const sourceNode = nodesRef.current.find((n) => n.id === connection.source);
+      const targetNode = nodesRef.current.find((n) => n.id === connection.target);
+      if (!sourceNode || !targetNode) return;
+
+      // Prevent connecting FROM END or TO START
+      if (sourceNode.type === "end") { toast.error("Cannot connect from END node."); return; }
+      if (targetNode.type === "start") { toast.error("Cannot connect to START node."); return; }
+
+      // Prevent duplicate edges
+      const duplicate = edgesRef.current.some(
+        (e) => e.source === connection.source && e.target === connection.target
+      );
+      if (duplicate) { toast.error("Connection already exists."); return; }
+
       pushHistory();
 
-      const loopback = isLoopback(connection.source, connection.target, nodesRef.current);
+      // Smart edge type detection
+      const isBackward = isLoopback(connection.source, connection.target, nodesRef.current);
+      const existingOutgoing = edgesRef.current.filter((e) => e.source === connection.source);
+      const hasMultipleOutgoing = existingOutgoing.length > 0;
 
-      if (loopback) {
-        const newEdge: Edge = {
-          id: `loopback-${connection.source}-${connection.target}-${Date.now()}`,
-          source: connection.source,
-          target: connection.target,
-          sourceHandle: connection.sourceHandle ?? undefined,
-          targetHandle: connection.targetHandle ?? undefined,
-          type: "loopback",
-          animated: false,
-          data: {
-            label: "Loop",
-            loopCondition: "quality_threshold",
-            maxIterations: 3,
-            exitThreshold: 0.85,
-            exitNodeId: "",
-          } as LoopbackEdgeData,
+      let edgeType: "flow" | "conditional" | "loop" = "flow";
+      let defaultData: Record<string, unknown> = { edgeType: "flow" };
+
+      if (isBackward || connection.source === connection.target) {
+        edgeType = "loop";
+        defaultData = {
+          edgeType: "loop",
+          maxIterations: 3,
+          exitThreshold: 0.85,
+          onMaxReached: "use_best",
         };
-        setEdges((eds) => [...eds, newEdge]);
-        toast.info("Loopback detected! Configure loop settings in the inspector.");
+      } else if (hasMultipleOutgoing) {
+        edgeType = "conditional";
+        defaultData = {
+          edgeType: "conditional",
+          conditionMethod: "llm_evaluation",
+          confidenceThreshold: 0.7,
+        };
+      }
+
+      const newEdge: Edge = {
+        id: `smart-${connection.source}-${connection.target}-${Date.now()}`,
+        source: connection.source,
+        target: connection.target,
+        sourceHandle: connection.sourceHandle ?? undefined,
+        targetHandle: connection.targetHandle ?? undefined,
+        type: "smart",
+        animated: edgeType === "flow",
+        data: defaultData,
+      };
+
+      setEdges((eds) => [...eds, newEdge]);
+
+      if (edgeType === "loop") {
+        toast.info("Loop edge detected! Configure loop settings in the inspector.");
         setSelectedNode(null);
         setTimeout(() => setSelectedEdge(newEdge), 50);
-      } else {
-        setEdges((eds) =>
-          addEdge(
-            { ...connection, type: "deletable", animated: true, style: { strokeWidth: 2 } },
-            eds
-          )
-        );
+      } else if (edgeType === "conditional") {
+        toast.info("Conditional edge added. Configure the condition in the inspector.");
+        setSelectedNode(null);
+        setTimeout(() => setSelectedEdge(newEdge), 50);
       }
     },
     [setEdges, pushHistory]
@@ -443,10 +452,8 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
   }, []);
 
   const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
-    if (edge.type === "loopback") {
-      setSelectedEdge(edge);
-      setSelectedNode(null);
-    }
+    setSelectedEdge(edge);
+    setSelectedNode(null);
   }, []);
 
   const onPaneClick = useCallback(() => {
@@ -459,6 +466,11 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
 
   const deleteNodeById = useCallback(
     (nodeId: string) => {
+      const nodeToCheck = nodesRef.current.find((n) => n.id === nodeId);
+      if (nodeToCheck && (nodeToCheck.type === "start" || nodeToCheck.type === "end")) {
+        toast.error("Cannot delete START/END nodes.");
+        return;
+      }
       pushHistory();
       const incomingEdges = edgesRef.current.filter((e) => e.target === nodeId);
       const outgoingEdges = edgesRef.current.filter((e) => e.source === nodeId);
@@ -472,12 +484,12 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
             );
             if (!exists && inc.source !== out.target) {
               reconnectEdges.push({
-                id: `e-${inc.source}-${out.target}-${Date.now()}`,
+                id: `smart-${inc.source}-${out.target}-${Date.now()}`,
                 source: inc.source,
                 target: out.target,
-                type: "deletable",
+                type: "smart",
                 animated: true,
-                style: { strokeWidth: 2 },
+                data: { edgeType: "flow" },
               });
             }
           }
@@ -535,9 +547,12 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
 
   const duplicateNode = useCallback(
     (node: Node) => {
+      if (node.type === "start" || node.type === "end") {
+        toast.error("Cannot duplicate START/END nodes.");
+        return;
+      }
       pushHistory();
-      const config = NODE_TYPE_MAP[node.type || "step"];
-      const id = `${node.type || "step"}_${Date.now()}`;
+      const id = `${node.type || "node"}_${Date.now()}`;
       const nodeData = node.data as unknown as WorkflowNodeData;
       const newNode: Node = {
         id,
@@ -545,18 +560,18 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
         position: { x: node.position.x + 40, y: node.position.y + 40 },
         data: {
           ...node.data,
-          label: `${nodeData.label || config?.label || "Node"} Copy`,
+          label: `${nodeData.label || "Node"} Copy`,
         },
       };
       setNodes((nds) => [...nds, newNode]);
-      toast.success(`Duplicated "${nodeData.label || config?.label || "Node"}".`);
+      toast.success(`Duplicated "${nodeData.label || "Node"}".`);
     },
     [setNodes, pushHistory]
   );
 
   // ─── Edge data update ───
   const handleEdgeUpdate = useCallback(
-    (edgeId: string, data: Partial<LoopbackEdgeData>) => {
+    (edgeId: string, data: Partial<LoopbackEdgeData> | Partial<WorkflowEdgeData>) => {
       setEdges((eds) =>
         eds.map((e) =>
           e.id === edgeId ? { ...e, data: { ...(e.data || {}), ...data } } : e
@@ -734,29 +749,42 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
     []
   );
 
+  // Default node data for each component type
+  const getDefaultNodeData = useCallback((componentType: string): Record<string, unknown> => {
+    switch (componentType) {
+      case "node":
+        return { label: "New Node", componentType: "node", nodeType: "node", llmEnabled: true, boundTools: [] };
+      case "gate":
+        return {
+          label: "Review Gate", componentType: "gate", nodeType: "gate",
+          availableActions: { approve: true, rejectWithReason: true, editAndApprove: true, sendBackForRevision: false, addCommentAndContinue: false },
+          waitDuration: "24h", onTimeout: "auto_approve",
+        };
+      case "split":
+        return {
+          label: "Parallel Split", componentType: "split", nodeType: "split",
+          branchCount: 3, fanOutMethod: "same_input", mergeMethod: "summarize",
+          waitStrategy: "wait_all", branchTimeout: 60,
+        };
+      default:
+        return { label: "New Node", componentType: "node", nodeType: "node", llmEnabled: true, boundTools: [] };
+    }
+  }, []);
+
   // Add node from toolbar click
   const handleAddNode = useCallback(
     (nodeType: string) => {
       pushHistory();
-      const config = NODE_TYPE_MAP[nodeType];
       const id = `${nodeType}_${Date.now()}`;
       const newNode: Node = {
         id,
         type: nodeType,
         position: { x: 250 + Math.random() * 200, y: 150 + Math.random() * 200 },
-        data: {
-          label: config?.label || "Node",
-          nodeType,
-          purpose: "",
-          boundTools: [],
-          onMissingData: "flag",
-          onToolFailure: "retry",
-          onLowConfidence: "proceed",
-        },
+        data: getDefaultNodeData(nodeType),
       };
       setNodes((nds) => [...nds, newNode]);
     },
-    [setNodes, pushHistory]
+    [setNodes, pushHistory, getDefaultNodeData]
   );
 
   // ─── Template insert ───
@@ -764,21 +792,15 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
     (template: WorkflowTemplate) => {
       pushHistory();
       const graph = template.graph();
-      setNodes((nds) => [...nds, ...graph.nodes]);
-      setEdges((eds) => [
-        ...eds,
-        ...graph.edges.map((e) => ({
-          ...e,
-          type: e.type === "loopback" ? "loopback" : "deletable",
-        })),
-      ]);
-      if (!entryRef.current && graph.entryPoint) {
-        setEntryPoint(graph.entryPoint);
-      }
+      setNodes(graph.nodes);
+      setEdges(graph.edges);
+      if (graph.entryPoint) setEntryPoint(graph.entryPoint);
+      if (graph.exitPoint) setExitPoint(graph.exitPoint);
       setTemplatePickerOpen(false);
-      toast.success(`${template.label} pattern added. Customize nodes, tools, and prompts.`);
+      setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);
+      toast.success(`${template.label} template loaded. Customize nodes, tools, and prompts.`);
     },
-    [setNodes, setEdges, pushHistory]
+    [setNodes, setEdges, fitView, pushHistory]
   );
 
   // Drop from toolbar drag
@@ -794,7 +816,6 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
       if (!nodeType) return;
       pushHistory();
 
-      const config = NODE_TYPE_MAP[nodeType];
       const id = `${nodeType}_${Date.now()}`;
       const reactFlowBounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
       const position = {
@@ -806,19 +827,11 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
         id,
         type: nodeType,
         position,
-        data: {
-          label: config?.label || "Node",
-          nodeType,
-          purpose: "",
-          boundTools: [],
-          onMissingData: "flag",
-          onToolFailure: "retry",
-          onLowConfidence: "proceed",
-        },
+        data: getDefaultNodeData(nodeType),
       };
       setNodes((nds) => [...nds, newNode]);
     },
-    [setNodes, pushHistory]
+    [setNodes, pushHistory, getDefaultNodeData]
   );
 
   // Update node data from inspector
@@ -1015,7 +1028,7 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             defaultEdgeOptions={{
-              type: "deletable",
+              type: "smart",
               animated: true,
               style: { strokeWidth: 2, stroke: "#94a3b8" },
             }}
@@ -1099,7 +1112,7 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
         </div>
 
         {/* Right panel */}
-        {selectedEdge && selectedEdge.type === "loopback" ? (
+        {selectedEdge ? (
           <EdgeInspector
             edge={selectedEdge}
             nodes={nodes}
@@ -1195,22 +1208,45 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
                 >
                   <span className="text-red-600">Delete Edge</span>
                 </button>
-                {contextEdge?.type !== "loopback" && (
-                  <button
-                    className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100"
-                    onClick={() => { toast.info("Edge conditions can be configured via Decision nodes."); setContextMenu(null); }}
-                  >
-                    Add Condition
-                  </button>
-                )}
-                {contextEdge?.type === "loopback" && (
-                  <button
-                    className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs hover:bg-slate-100"
-                    onClick={() => { setSelectedEdge(contextEdge); setSelectedNode(null); setContextMenu(null); }}
-                  >
-                    Edit Loop Settings
-                  </button>
-                )}
+                <button
+                  className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs hover:bg-slate-100"
+                  onClick={() => {
+                    if (contextEdge) {
+                      handleEdgeUpdate(contextEdge.id, { edgeType: "flow" } as Partial<WorkflowEdgeData>);
+                    }
+                    setContextMenu(null);
+                  }}
+                >
+                  Change to Flow
+                </button>
+                <button
+                  className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs hover:bg-slate-100"
+                  onClick={() => {
+                    if (contextEdge) {
+                      handleEdgeUpdate(contextEdge.id, { edgeType: "conditional", conditionMethod: "llm_evaluation" } as Partial<WorkflowEdgeData>);
+                    }
+                    setContextMenu(null);
+                  }}
+                >
+                  Change to Conditional
+                </button>
+                <button
+                  className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs hover:bg-slate-100"
+                  onClick={() => {
+                    if (contextEdge) {
+                      handleEdgeUpdate(contextEdge.id, { edgeType: "loop", maxIterations: 3 } as Partial<WorkflowEdgeData>);
+                    }
+                    setContextMenu(null);
+                  }}
+                >
+                  Change to Loop
+                </button>
+                <button
+                  className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs hover:bg-slate-100"
+                  onClick={() => { if (contextEdge) { setSelectedEdge(contextEdge); setSelectedNode(null); } setContextMenu(null); }}
+                >
+                  Edit in Inspector
+                </button>
               </>
             )}
           </div>

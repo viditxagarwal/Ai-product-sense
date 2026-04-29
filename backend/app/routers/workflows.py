@@ -39,3 +39,10 @@ def update_workflow(
 @router.delete("/{workflow_id}")
 def delete_workflow(workflow_id: UUID, user_id: UUID = Depends(get_current_user_id)):
     return workflow_service.delete_workflow(user_id, workflow_id)
+
+
+@router.post("/{workflow_id}/validate")
+def validate_workflow(workflow_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    wf = workflow_service.get_workflow(user_id, workflow_id)
+    graph_data = wf.get("graph_data", {})
+    return workflow_service.validate_graph(graph_data)

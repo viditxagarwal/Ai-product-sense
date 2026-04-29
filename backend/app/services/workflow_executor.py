@@ -402,17 +402,47 @@ async def _execute_workflow_graph(
     try:
         for i, node in enumerate(nodes):
             node_type = node.get("type", "step")
-            node_name = node.get("data", {}).get("label", node_type)
+            node_data = node.get("data", {})
+            node_name = node_data.get("label", node_type)
+            component_type = node_data.get("componentType", node_type)
             step_number = i + 1
 
-            logger.info("[exec] Executing node: '%s' (type: %s) [step %d/%d]",
-                        node_name, node_type, step_number, len(nodes))
+            logger.info("[exec] Executing node: '%s' (type: %s, component: %s) [step %d/%d]",
+                        node_name, node_type, component_type, step_number, len(nodes))
+
+            # ── START/END nodes are passthrough ──────────────
+            if component_type in ("start", "end") or node_type in ("start", "end"):
+                logger.info("[exec] %s node — passthrough", component_type or node_type)
+                step = supabase.table("execution_steps").insert({
+                    "run_id": run_id,
+                    "step_number": step_number,
+                    "node_type": component_type or node_type,
+                    "node_name": node_name,
+                    "status": "completed",
+                    "duration_ms": 0,
+                    "output_payload": {"status": f"{(component_type or node_type)}_passthrough"},
+                }).execute()
+                await send_event({
+                    "type": "step_started",
+                    "step_id": step.data[0]["id"],
+                    "step_number": step_number,
+                    "node_type": component_type or node_type,
+                    "node_name": node_name,
+                })
+                await send_event({
+                    "type": "step_completed",
+                    "step_id": step.data[0]["id"],
+                    "step_number": step_number,
+                    "duration_ms": 0,
+                    "result_summary": f"{node_name} — passthrough",
+                })
+                continue
 
             # Create step record
             step = supabase.table("execution_steps").insert({
                 "run_id": run_id,
                 "step_number": step_number,
-                "node_type": node_type,
+                "node_type": component_type or node_type,
                 "node_name": node_name,
                 "status": "running",
             }).execute()
@@ -422,14 +452,20 @@ async def _execute_workflow_graph(
                 "type": "step_started",
                 "step_id": step_id,
                 "step_number": step_number,
-                "node_type": node_type,
+                "node_type": component_type or node_type,
                 "node_name": node_name,
             })
 
             step_start = datetime.now(timezone.utc)
 
             # ── Build messages for this node ─────────────────
-            node_instructions = node.get("data", {}).get("systemPromptHint", "")
+            # Support both new (systemPrompt) and old (systemPromptHint, purpose) field names
+            node_instructions = (
+                node_data.get("systemPrompt")
+                or node_data.get("systemPromptHint")
+                or node_data.get("purpose")
+                or ""
+            )
             node_messages = []
 
             # System prompt
@@ -442,15 +478,39 @@ async def _execute_workflow_graph(
             # Conversation history
             node_messages.extend(history)
 
-            # For decision nodes, ask for routing
-            if node_type == "decision":
-                conditions = node.get("data", {}).get("conditions", "")
+            # ── Gate nodes (human_review, human_checkpoint) — auto-approve ──
+            if component_type == "gate" or node_type in ("human_review", "human_checkpoint"):
+                logger.info("[exec] Gate node '%s' auto-approved", node_name)
+                duration_ms = 10
+                supabase.table("execution_steps").update({
+                    "status": "completed",
+                    "duration_ms": duration_ms,
+                    "output_payload": {"status": "auto_approved"},
+                }).eq("id", step_id).execute()
+                await send_event({
+                    "type": "step_completed",
+                    "step_id": step_id,
+                    "step_number": step_number,
+                    "duration_ms": duration_ms,
+                    "result_summary": "Gate: auto-approved (simulated)",
+                })
+                total_duration += duration_ms
+                continue
+
+            # ── Split nodes (parallel, parallelization) ──────
+            elif component_type == "split" or node_type in ("parallel", "parallelization"):
+                node_messages.append({"role": "user", "content":
+                    f"Process the following in parallel (handle all branches):\n{user_message}\n\nPrevious context:\n{last_output or 'Start of workflow'}"
+                })
+
+            # ── Decision/Route nodes (old types, now handled via edges) ──
+            elif node_type in ("decision", "route"):
+                conditions = node_data.get("conditions", "") or node_data.get("conditionPrompt", "")
                 if conditions:
                     node_messages.append({"role": "user", "content":
                         f"Based on the previous output, evaluate these conditions and decide the route:\n{conditions}\n\nPrevious output:\n{last_output or user_message}"
                     })
                 else:
-                    # No conditions configured — just pass through
                     logger.info("[exec] Decision node '%s' has no conditions, passing through", node_name)
                     duration_ms = 10
                     supabase.table("execution_steps").update({
@@ -468,32 +528,29 @@ async def _execute_workflow_graph(
                     total_duration += duration_ms
                     continue
 
-            elif node_type == "human_review":
-                # Auto-approve for now
-                logger.info("[exec] Human review node '%s' auto-approved", node_name)
-                duration_ms = 10
-                supabase.table("execution_steps").update({
-                    "status": "completed",
-                    "duration_ms": duration_ms,
-                    "output_payload": {"status": "auto_approved"},
-                }).eq("id", step_id).execute()
-                await send_event({
-                    "type": "step_completed",
-                    "step_id": step_id,
-                    "step_number": step_number,
-                    "duration_ms": duration_ms,
-                    "result_summary": "Human review: auto-approved (simulated)",
-                })
-                total_duration += duration_ms
-                continue
-
-            elif node_type == "parallel":
-                # Execute as a single step for now
-                node_messages.append({"role": "user", "content":
-                    f"Process the following in parallel (handle all branches):\n{user_message}\n\nPrevious context:\n{last_output or 'Start of workflow'}"
-                })
+            # ── Node type (new) or regular step ──────────────
             else:
-                # Regular step node — add the user message or previous output
+                llm_enabled = node_data.get("llmEnabled", True)
+                if not llm_enabled:
+                    # Tool-only node — skip LLM call, passthrough
+                    logger.info("[exec] Tool-only node '%s' (llmEnabled=false), passthrough", node_name)
+                    duration_ms = 50
+                    supabase.table("execution_steps").update({
+                        "status": "completed",
+                        "duration_ms": duration_ms,
+                        "output_payload": {"status": "tool_execution", "tools": node_data.get("boundTools", [])},
+                    }).eq("id", step_id).execute()
+                    await send_event({
+                        "type": "step_completed",
+                        "step_id": step_id,
+                        "step_number": step_number,
+                        "duration_ms": duration_ms,
+                        "result_summary": f"Tool node executed ({len(node_data.get('boundTools', []))} tools)",
+                    })
+                    total_duration += duration_ms
+                    continue
+
+                # LLM-enabled node — add the user message or previous output
                 if last_output:
                     node_messages.append({"role": "user", "content":
                         f"{user_message}\n\nPrevious step output:\n{last_output}"

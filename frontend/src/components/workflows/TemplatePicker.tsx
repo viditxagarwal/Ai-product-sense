@@ -22,111 +22,30 @@ import {
 const PREVIEW_ICONS: Record<string, typeof Box> = {
   react_agent: RefreshCw,
   simple_chain: ArrowRight,
+  rag_pipeline: Box,
   parallel_analysis: Layers,
-  chain_with_validation: RefreshCw,
   human_in_the_loop: UserCheck,
   classifier_router: GitBranch,
-  blank: Box,
+  plan_and_execute: RefreshCw,
+  validator_loop: RefreshCw,
+  orchestrator: Layers,
+  tool_pipeline: Box,
 };
 
 /** Tiny inline diagram preview for each template */
 function TemplatePreview({ template }: { template: WorkflowTemplate }) {
-  const id = template.id;
-
   const nodeClass =
     "flex items-center justify-center rounded bg-slate-100 border border-slate-200 px-1.5 py-0.5 text-[8px] font-medium text-slate-600";
   const arrowClass = "text-slate-300 text-[10px]";
-  const loopClass =
-    "rounded-full border border-teal-300 bg-teal-50 px-1 py-0.5 text-[7px] text-teal-600";
 
-  if (id === "react_agent") {
-    return (
-      <div className="flex items-center gap-1">
-        <span className={nodeClass}>Step</span>
-        <span className={arrowClass}>↔</span>
-        <span className={nodeClass}>Decision</span>
-        <span className={loopClass}>loop</span>
-      </div>
-    );
-  }
-  if (id === "simple_chain") {
-    return (
-      <div className="flex items-center gap-1">
-        <span className={nodeClass}>Step</span>
-        <span className={arrowClass}>→</span>
-        <span className={nodeClass}>Step</span>
-        <span className={arrowClass}>→</span>
-        <span className={nodeClass}>Step</span>
-      </div>
-    );
-  }
-  if (id === "parallel_analysis") {
-    return (
-      <div className="flex items-center gap-1">
-        <span className={nodeClass}>Step</span>
-        <span className={arrowClass}>→</span>
-        <span className="rounded border border-purple-200 bg-purple-50 px-1 py-0.5 text-[8px] text-purple-600">
-          Parallel
-        </span>
-        <span className={arrowClass}>→</span>
-        <span className={nodeClass}>Step</span>
-      </div>
-    );
-  }
-  if (id === "chain_with_validation") {
-    return (
-      <div className="flex items-center gap-1">
-        <span className={nodeClass}>Step</span>
-        <span className={arrowClass}>→</span>
-        <span className={nodeClass}>Step</span>
-        <span className={arrowClass}>→</span>
-        <span className="rounded border border-orange-200 bg-orange-50 px-1 py-0.5 text-[8px] text-orange-600">
-          Decision
-        </span>
-        <span className={loopClass}>loop</span>
-      </div>
-    );
-  }
-  if (id === "human_in_the_loop") {
-    return (
-      <div className="flex items-center gap-1">
-        <span className={nodeClass}>Step</span>
-        <span className={arrowClass}>→</span>
-        <span className="rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-[8px] text-amber-600">
-          Human
-        </span>
-        <span className={arrowClass}>→</span>
-        <span className={nodeClass}>Step</span>
-      </div>
-    );
-  }
-  if (id === "classifier_router") {
-    return (
-      <div className="flex flex-col items-center gap-0.5">
-        <div className="flex items-center gap-1">
-          <span className={nodeClass}>Step</span>
-          <span className={arrowClass}>→</span>
-          <span className="rounded border border-orange-200 bg-orange-50 px-1 py-0.5 text-[8px] text-orange-600">
-            Decision
-          </span>
-        </div>
-        <div className="flex items-center gap-1">
-          <span className={arrowClass}>↙</span>
-          <span className={arrowClass}>↓</span>
-          <span className={arrowClass}>↘</span>
-        </div>
-        <div className="flex items-center gap-0.5">
-          <span className={nodeClass}>A</span>
-          <span className={nodeClass}>B</span>
-          <span className={nodeClass}>C</span>
-        </div>
-      </div>
-    );
-  }
-  // blank
+  // Simple preview showing the flow pattern
   return (
-    <div className="flex items-center gap-1">
-      <span className={nodeClass}>Step</span>
+    <div className="flex items-center gap-1 text-[8px]">
+      <span className={nodeClass}>S</span>
+      <span className={arrowClass}>→</span>
+      <span className="truncate text-[9px] text-slate-500">{template.preview.replace("START → ", "").replace(" → END", "")}</span>
+      <span className={arrowClass}>→</span>
+      <span className={nodeClass}>E</span>
     </div>
   );
 }

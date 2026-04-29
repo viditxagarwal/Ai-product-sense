@@ -1,5 +1,5 @@
 import type { Node, Edge } from "@xyflow/react";
-import type { LoopbackEdgeData } from "./LoopbackEdge";
+import type { WorkflowNodeData, WorkflowEdgeData } from "@/types";
 
 export interface WorkflowTemplateGraph {
   nodes: Node[];
@@ -13,143 +13,92 @@ export interface WorkflowTemplate {
   label: string;
   description: string;
   useCase: string;
-  preview: string; // ASCII-style visual
-  color: string;   // tailwind bg class
+  preview: string;
+  color: string;
   graph: () => WorkflowTemplateGraph;
 }
 
-function ts() {
-  return Date.now();
+// ─── Node factory helpers ─────────────────────────────────
+
+function startNode(id: string, x: number, y: number): Node {
+  return { id, type: "start", position: { x, y }, data: { label: "START", componentType: "start", nodeType: "start" } };
 }
 
-function stepNode(
-  id: string,
-  label: string,
-  purpose: string,
-  x: number,
-  y: number,
-  extra: Record<string, unknown> = {}
+function endNode(id: string, x: number, y: number): Node {
+  return { id, type: "end", position: { x, y }, data: { label: "END", componentType: "end", nodeType: "end" } };
+}
+
+function nodeFactory(
+  id: string, label: string, x: number, y: number,
+  extra: Partial<WorkflowNodeData> = {}
 ): Node {
   return {
-    id,
-    type: "step",
-    position: { x, y },
+    id, type: "node", position: { x, y },
+    data: { label, componentType: "node", nodeType: "node", llmEnabled: true, boundTools: [], ...extra },
+  };
+}
+
+function toolNode(
+  id: string, label: string, x: number, y: number,
+  extra: Partial<WorkflowNodeData> = {}
+): Node {
+  return {
+    id, type: "node", position: { x, y },
+    data: { label, componentType: "node", nodeType: "node", llmEnabled: false, ...extra },
+  };
+}
+
+function gateFactory(
+  id: string, label: string, x: number, y: number,
+  extra: Partial<WorkflowNodeData> = {}
+): Node {
+  return {
+    id, type: "gate", position: { x, y },
     data: {
-      label,
-      nodeType: "step",
-      purpose,
-      boundTools: [],
-      onMissingData: "flag",
-      onToolFailure: "retry",
-      onLowConfidence: "proceed",
-      ...extra,
+      label, componentType: "gate", nodeType: "gate",
+      availableActions: { approve: true, rejectWithReason: true, editAndApprove: true, sendBackForRevision: false, addCommentAndContinue: false },
+      waitDuration: "24h", onTimeout: "auto_approve", ...extra,
     },
   };
 }
 
-function decisionNode(
-  id: string,
-  label: string,
-  purpose: string,
-  x: number,
-  y: number,
-  extra: Record<string, unknown> = {}
+function splitFactory(
+  id: string, label: string, x: number, y: number,
+  extra: Partial<WorkflowNodeData> = {}
 ): Node {
   return {
-    id,
-    type: "decision",
-    position: { x, y },
+    id, type: "split", position: { x, y },
     data: {
-      label,
-      nodeType: "decision",
-      purpose,
-      conditionType: "rule_based",
-      conditionPrompt: "",
-      pathMappings: "",
-      boundTools: [],
-      ...extra,
+      label, componentType: "split", nodeType: "split",
+      branchCount: 3, fanOutMethod: "same_input", mergeMethod: "summarize",
+      waitStrategy: "wait_all", branchTimeout: 60, ...extra,
     },
   };
 }
 
-function parallelNode(
-  id: string,
-  label: string,
-  purpose: string,
-  x: number,
-  y: number,
-  extra: Record<string, unknown> = {}
-): Node {
+// ─── Edge factory helpers ─────────────────────────────────
+
+function flowEdge(source: string, target: string, suffix?: string): Edge {
   return {
-    id,
-    type: "parallel",
-    position: { x, y },
-    data: {
-      label,
-      nodeType: "parallel",
-      purpose,
-      branchCount: 3,
-      fanOutMethod: "by_subtask",
-      mergeMethod: "synthesize",
-      maxBranches: 5,
-      ...extra,
-    },
+    id: `edge-${source}-${target}${suffix ? `-${suffix}` : ""}`,
+    source, target, type: "smart", animated: true,
+    data: { edgeType: "flow" } as WorkflowEdgeData,
   };
 }
 
-function humanReviewNode(
-  id: string,
-  label: string,
-  purpose: string,
-  x: number,
-  y: number,
-  extra: Record<string, unknown> = {}
-): Node {
+function conditionalEdge(source: string, target: string, label: string, extra: Partial<WorkflowEdgeData> = {}): Edge {
   return {
-    id,
-    type: "human_review",
-    position: { x, y },
-    data: {
-      label,
-      nodeType: "human_review",
-      purpose,
-      displayContent: "",
-      humanOptions: "approve, reject, edit",
-      timeoutBehavior: "wait",
-      timeoutMinutes: 0,
-      ...extra,
-    },
+    id: `edge-${source}-${target}-cond`,
+    source, target, type: "smart", animated: false,
+    data: { edgeType: "conditional", label, conditionMethod: "llm_evaluation", confidenceThreshold: 0.7, ...extra } as WorkflowEdgeData,
   };
 }
 
-function edge(
-  source: string,
-  target: string,
-  suffix?: string
-): Edge {
+function loopEdge(source: string, target: string, maxIterations = 3): Edge {
   return {
-    id: `e-${source}-${target}-${suffix || ts()}`,
-    source,
-    target,
-    type: "deletable",
-    animated: true,
-    style: { strokeWidth: 2 },
-  };
-}
-
-function loopbackEdge(
-  source: string,
-  target: string,
-  data: LoopbackEdgeData,
-  suffix?: string
-): Edge {
-  return {
-    id: `loopback-${source}-${target}-${suffix || ts()}`,
-    source,
-    target,
-    type: "loopback",
-    animated: false,
-    data,
+    id: `edge-${source}-${target}-loop`,
+    source, target, type: "smart", animated: false,
+    data: { edgeType: "loop", maxIterations, exitThreshold: 0.85, onMaxReached: "use_best" } as WorkflowEdgeData,
   };
 }
 
@@ -159,247 +108,249 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
   {
     id: "react_agent",
     label: "ReAct Agent",
-    description:
-      "The agent thinks, acts, observes, and repeats until done. The most common agentic pattern.",
+    description: "The agent thinks, acts, observes, and repeats until done.",
     useCase: "General-purpose tool-using agent",
-    preview: "Step ↔ Decision (loop)",
+    preview: "START → Agent ↻ → END",
     color: "bg-blue-500",
     graph: () => {
-      const s = String(ts());
-      const agentId = `step_agent_${s}`;
-      const decisionId = `decision_continue_${s}`;
-
+      const s = startNode("tpl-react-start", 50, 250);
+      const agent = nodeFactory("tpl-react-agent", "ReAct Agent", 250, 250, {
+        systemPrompt: "You are a helpful assistant. Reason step by step, use tools when needed, provide a complete answer.",
+      });
+      const e = endNode("tpl-react-end", 550, 250);
       return {
-        nodes: [
-          stepNode(agentId, "Agent", "Reason about the task, decide which tool to use, observe results", 300, 100, {
-            systemPromptHint:
-              "This workflow uses the ReAct Agent pattern. The agent reasons, selects a tool, observes the result, and loops until it has a final answer. Bind your tools here.",
-          }),
-          decisionNode(decisionId, "Should Continue?", "Did the agent produce a final answer?", 300, 280, {
-            conditionType: "llm_classification",
-            conditionPrompt: "Does the agent output contain a final answer, or does it need more tool calls?",
-            pathMappings: "final_answer → END\nneeds_more_work → Agent",
-          }),
-        ],
+        nodes: [s, agent, e],
         edges: [
-          edge(agentId, decisionId, s),
-          loopbackEdge(decisionId, agentId, {
-            label: "Needs more work",
-            loopCondition: "max_iterations",
-            maxIterations: 10,
-            exitThreshold: 1.0,
-            exitNodeId: "",
-          }, s),
+          flowEdge(s.id, agent.id),
+          conditionalEdge(agent.id, e.id, "answer complete"),
+          loopEdge(agent.id, agent.id, 5),
         ],
-        entryPoint: agentId,
-        exitPoint: decisionId,
+        entryPoint: s.id,
+        exitPoint: e.id,
       };
     },
   },
   {
     id: "simple_chain",
     label: "Simple Chain",
-    description: "Sequential steps. Each step's output feeds into the next.",
-    useCase: "Multi-step processing pipeline",
-    preview: "Step → Step → Step",
+    description: "Sequential processing pipeline.",
+    useCase: "Multi-step processing",
+    preview: "START → A → B → C → END",
     color: "bg-emerald-500",
     graph: () => {
-      const s = String(ts());
-      const step1 = `step_input_${s}`;
-      const step2 = `step_process_${s}`;
-      const step3 = `step_output_${s}`;
-
+      const s = startNode("tpl-chain-start", 50, 250);
+      const a = nodeFactory("tpl-chain-analyzer", "Analyzer", 230, 250, { systemPrompt: "Analyze the input thoroughly." });
+      const b = nodeFactory("tpl-chain-synth", "Synthesizer", 470, 250, { systemPrompt: "Synthesize the analysis into key findings." });
+      const c = nodeFactory("tpl-chain-fmt", "Formatter", 710, 250, { systemPrompt: "Format the output clearly." });
+      const e = endNode("tpl-chain-end", 930, 250);
       return {
-        nodes: [
-          stepNode(step1, "Input", "Parse and prepare the input data", 300, 100, {
-            systemPromptHint: "This workflow uses the Simple Chain pattern. Each step's output feeds into the next. Customize each step's tools and prompts.",
-          }),
-          stepNode(step2, "Process", "Apply the core transformation or analysis", 300, 260),
-          stepNode(step3, "Output", "Format and return the final result", 300, 420),
-        ],
-        edges: [
-          edge(step1, step2, s),
-          edge(step2, step3, s),
-        ],
-        entryPoint: step1,
-        exitPoint: step3,
+        nodes: [s, a, b, c, e],
+        edges: [flowEdge(s.id, a.id), flowEdge(a.id, b.id), flowEdge(b.id, c.id), flowEdge(c.id, e.id)],
+        entryPoint: s.id, exitPoint: e.id,
       };
     },
   },
   {
-    id: "parallel_analysis",
-    label: "Parallel Analysis",
-    description: "Split work into parallel branches, then merge results.",
-    useCase: "Multi-perspective analysis, bulk processing",
-    preview: "Step → Parallel → Step",
-    color: "bg-purple-500",
+    id: "rag_pipeline",
+    label: "RAG Pipeline",
+    description: "Retrieve context then generate answer.",
+    useCase: "Knowledge-grounded Q&A",
+    preview: "START → Retrieve → Generate → END",
+    color: "bg-emerald-500",
     graph: () => {
-      const s = String(ts());
-      const inputId = `step_input_${s}`;
-      const parallelId = `parallel_split_${s}`;
-      const synthesizeId = `step_synthesize_${s}`;
-
+      const s = startNode("tpl-rag-start", 50, 250);
+      const ret = toolNode("tpl-rag-retrieve", "Retrieve Context", 230, 250);
+      const gen = nodeFactory("tpl-rag-generate", "Generate Answer", 470, 250, {
+        systemPrompt: "Using the retrieved context, answer the user's question accurately. Cite your sources.",
+      });
+      const e = endNode("tpl-rag-end", 700, 250);
       return {
-        nodes: [
-          stepNode(inputId, "Input", "Prepare the data for parallel processing", 300, 100, {
-            systemPromptHint: "This workflow uses the Parallel Analysis pattern. Work is split into branches, processed in parallel, then merged. Customize the Parallel node's fan-out and merge settings.",
-          }),
-          parallelNode(parallelId, "Analyze", "Process each branch independently", 300, 260, {
-            branchCount: 3,
-            fanOutMethod: "by_perspective",
-            mergeMethod: "synthesize",
-          }),
-          stepNode(synthesizeId, "Synthesize", "Merge branch outputs into a unified result", 300, 420),
-        ],
-        edges: [
-          edge(inputId, parallelId, s),
-          edge(parallelId, synthesizeId, s),
-        ],
-        entryPoint: inputId,
-        exitPoint: synthesizeId,
-      };
-    },
-  },
-  {
-    id: "chain_with_validation",
-    label: "Chain with Validation",
-    description: "Generate, validate, refine until quality threshold is met.",
-    useCase: "Content generation, code review loops",
-    preview: "Step → Step → Decision (loop)",
-    color: "bg-teal-500",
-    graph: () => {
-      const s = String(ts());
-      const generatorId = `step_generator_${s}`;
-      const validatorId = `step_validator_${s}`;
-      const decisionId = `decision_pass_${s}`;
-      const outputId = `step_output_${s}`;
-
-      return {
-        nodes: [
-          stepNode(generatorId, "Generator", "Produce the initial output (text, code, analysis, etc.)", 300, 100, {
-            systemPromptHint: "This workflow uses the Chain with Validation pattern. The Generator produces output, the Validator checks it, and the Decision routes back for refinement or forward to the final output.",
-          }),
-          stepNode(validatorId, "Validator", "Check quality, correctness, and completeness of the generated output", 300, 260),
-          decisionNode(decisionId, "Pass?", "Does the output meet the quality threshold?", 300, 420, {
-            conditionType: "llm_classification",
-            conditionPrompt: "Does the validator's assessment indicate the output passes all quality checks?",
-            pathMappings: "pass → Output\nfail → Generator",
-          }),
-          stepNode(outputId, "Output", "Format and return the validated result", 300, 580),
-        ],
-        edges: [
-          edge(generatorId, validatorId, s),
-          edge(validatorId, decisionId, s),
-          edge(decisionId, outputId, s),
-          loopbackEdge(decisionId, generatorId, {
-            label: "Needs refinement",
-            loopCondition: "quality_threshold",
-            maxIterations: 5,
-            exitThreshold: 0.85,
-            exitNodeId: outputId,
-          }, s),
-        ],
-        entryPoint: generatorId,
-        exitPoint: outputId,
+        nodes: [s, ret, gen, e],
+        edges: [flowEdge(s.id, ret.id), flowEdge(ret.id, gen.id), flowEdge(gen.id, e.id)],
+        entryPoint: s.id, exitPoint: e.id,
       };
     },
   },
   {
     id: "human_in_the_loop",
     label: "Human-in-the-Loop",
-    description: "AI does initial work, human reviews, AI finalizes.",
+    description: "AI drafts, human reviews, AI finalizes.",
     useCase: "Approval workflows, sensitive decisions",
-    preview: "Step → Human Review → Step",
+    preview: "START → Draft → Review ↻ → Finalize → END",
     color: "bg-amber-500",
     graph: () => {
-      const s = String(ts());
-      const analysisId = `step_analysis_${s}`;
-      const reviewId = `human_review_${s}`;
-      const finalId = `step_final_${s}`;
-
+      const s = startNode("tpl-hitl-start", 50, 250);
+      const draft = nodeFactory("tpl-hitl-draft", "Draft Response", 230, 250, { systemPrompt: "Draft a thorough response." });
+      const review = gateFactory("tpl-hitl-review", "Manager Review", 450, 250, { waitDuration: "24h", onTimeout: "auto_approve" });
+      const fin = nodeFactory("tpl-hitl-finalize", "Finalize Response", 670, 250, { systemPrompt: "Incorporate feedback and finalize." });
+      const e = endNode("tpl-hitl-end", 890, 250);
       return {
-        nodes: [
-          stepNode(analysisId, "Analysis", "AI performs initial analysis and generates a draft", 300, 100, {
-            systemPromptHint: "This workflow uses the Human-in-the-Loop pattern. AI drafts, human reviews and provides feedback, then AI finalizes. Configure what the human reviewer sees in the Human Review node.",
-          }),
-          humanReviewNode(reviewId, "Human Review", "Pause for human input, approval, or edits", 300, 280, {
-            displayContent: "Show the AI's draft analysis, confidence scores, and sources used.",
-            humanOptions: "approve, reject, edit, escalate",
-          }),
-          stepNode(finalId, "Finalize", "Incorporate human feedback and produce the final output", 300, 460),
-        ],
+        nodes: [s, draft, review, fin, e],
         edges: [
-          edge(analysisId, reviewId, s),
-          edge(reviewId, finalId, s),
+          flowEdge(s.id, draft.id),
+          flowEdge(draft.id, review.id),
+          conditionalEdge(review.id, fin.id, "approved"),
+          loopEdge(review.id, draft.id, 3),
+          flowEdge(fin.id, e.id),
         ],
-        entryPoint: analysisId,
-        exitPoint: finalId,
+        entryPoint: s.id, exitPoint: e.id,
+      };
+    },
+  },
+  {
+    id: "parallel_analysis",
+    label: "Parallel Analysis",
+    description: "Analyze from multiple perspectives then synthesize.",
+    useCase: "Multi-perspective analysis",
+    preview: "START → Split → [A,B,C] → Synthesize → END",
+    color: "bg-purple-500",
+    graph: () => {
+      const s = startNode("tpl-par-start", 50, 250);
+      const sp = splitFactory("tpl-par-split", "Fan Out", 230, 250, {
+        branchCount: 3, fanOutMethod: "custom_per_branch", mergeMethod: "summarize",
+        branchPrompts: ["Analyze from financial perspective", "Analyze from legal perspective", "Analyze from operational perspective"],
+      });
+      const fin = nodeFactory("tpl-par-finance", "Finance Analyst", 450, 100, { systemPrompt: "Analyze from a financial perspective." });
+      const leg = nodeFactory("tpl-par-legal", "Legal Analyst", 450, 250, { systemPrompt: "Analyze from a legal perspective." });
+      const ops = nodeFactory("tpl-par-ops", "Operations Analyst", 450, 400, { systemPrompt: "Analyze from an operational perspective." });
+      const synth = nodeFactory("tpl-par-synth", "Synthesize", 670, 250, { systemPrompt: "Combine the analyses into a unified report." });
+      const e = endNode("tpl-par-end", 890, 250);
+      return {
+        nodes: [s, sp, fin, leg, ops, synth, e],
+        edges: [
+          flowEdge(s.id, sp.id),
+          flowEdge(sp.id, fin.id, "a"), flowEdge(sp.id, leg.id, "b"), flowEdge(sp.id, ops.id, "c"),
+          flowEdge(fin.id, synth.id, "a"), flowEdge(leg.id, synth.id, "b"), flowEdge(ops.id, synth.id, "c"),
+          flowEdge(synth.id, e.id),
+        ],
+        entryPoint: s.id, exitPoint: e.id,
       };
     },
   },
   {
     id: "classifier_router",
     label: "Classifier Router",
-    description: "Route to different processing paths based on input type.",
-    useCase: "Multi-domain intake, support ticket routing",
-    preview: "Step → Decision → [A, B, C]",
+    description: "Route to specialist based on input classification.",
+    useCase: "Multi-domain intake, support routing",
+    preview: "START → Classify → [A,B,C] → Format → END",
     color: "bg-orange-500",
     graph: () => {
-      const s = String(ts());
-      const inputId = `step_input_${s}`;
-      const routerId = `decision_router_${s}`;
-      const pathA = `step_path_a_${s}`;
-      const pathB = `step_path_b_${s}`;
-      const pathC = `step_path_c_${s}`;
-      const mergeId = `step_merge_${s}`;
-
+      const s = startNode("tpl-cls-start", 50, 250);
+      const cls = nodeFactory("tpl-cls-classify", "Classify Intent", 230, 250, { systemPrompt: "Determine the category of the user's question." });
+      const fa = nodeFactory("tpl-cls-finance", "Finance Agent", 480, 100, { systemPrompt: "Answer financial questions." });
+      const la = nodeFactory("tpl-cls-legal", "Legal Agent", 480, 250, { systemPrompt: "Answer legal questions." });
+      const ga = nodeFactory("tpl-cls-general", "General Agent", 480, 400, { systemPrompt: "Answer general questions." });
+      const fmt = nodeFactory("tpl-cls-format", "Format", 700, 250, { systemPrompt: "Format the response." });
+      const e = endNode("tpl-cls-end", 920, 250);
       return {
-        nodes: [
-          stepNode(inputId, "Input", "Receive and preprocess the incoming request", 300, 80, {
-            systemPromptHint: "This workflow uses the Classifier Router pattern. Input is classified, then routed to the appropriate specialized processing path. Customize the Decision node's classification prompt and the path mappings.",
-          }),
-          decisionNode(routerId, "Classify", "Determine the input type and route accordingly", 300, 240, {
-            conditionType: "llm_classification",
-            conditionPrompt: "Classify this input into one of: type_a, type_b, type_c",
-            pathMappings: "type_a → Path A\ntype_b → Path B\ntype_c → Path C",
-          }),
-          stepNode(pathA, "Path A", "Process type A inputs", 80, 420),
-          stepNode(pathB, "Path B", "Process type B inputs", 300, 420),
-          stepNode(pathC, "Path C", "Process type C inputs", 520, 420),
-          stepNode(mergeId, "Merge", "Combine outputs from all paths into a unified response", 300, 600),
-        ],
+        nodes: [s, cls, fa, la, ga, fmt, e],
         edges: [
-          edge(inputId, routerId, s),
-          edge(routerId, pathA, `${s}a`),
-          edge(routerId, pathB, `${s}b`),
-          edge(routerId, pathC, `${s}c`),
-          edge(pathA, mergeId, `${s}ma`),
-          edge(pathB, mergeId, `${s}mb`),
-          edge(pathC, mergeId, `${s}mc`),
+          flowEdge(s.id, cls.id),
+          conditionalEdge(cls.id, fa.id, "financial question"),
+          conditionalEdge(cls.id, la.id, "legal question"),
+          { ...conditionalEdge(cls.id, ga.id, "default"), data: { edgeType: "conditional", conditionMethod: "always", label: "default" } as WorkflowEdgeData },
+          flowEdge(fa.id, fmt.id, "a"), flowEdge(la.id, fmt.id, "b"), flowEdge(ga.id, fmt.id, "c"),
+          flowEdge(fmt.id, e.id),
         ],
-        entryPoint: inputId,
-        exitPoint: mergeId,
+        entryPoint: s.id, exitPoint: e.id,
       };
     },
   },
   {
-    id: "blank",
-    label: "Blank Canvas",
-    description: "Start from scratch with a single empty Step node.",
-    useCase: "Power users, custom patterns",
-    preview: "Step",
-    color: "bg-slate-400",
+    id: "plan_and_execute",
+    label: "Plan and Execute",
+    description: "Create a plan then execute steps iteratively.",
+    useCase: "Complex multi-step tasks",
+    preview: "START → Planner ↔ Executor → END",
+    color: "bg-teal-500",
     graph: () => {
-      const s = String(ts());
-      const stepId = `step_start_${s}`;
-
+      const s = startNode("tpl-pe-start", 50, 250);
+      const planner = nodeFactory("tpl-pe-planner", "Planner", 230, 250, { systemPrompt: "Break the task into numbered steps. Output the next step to execute." });
+      const executor = nodeFactory("tpl-pe-executor", "Executor", 470, 250, { systemPrompt: "Execute the current step from the plan." });
+      const e = endNode("tpl-pe-end", 710, 250);
       return {
-        nodes: [
-          stepNode(stepId, "Start", "Your first processing step", 300, 200),
+        nodes: [s, planner, executor, e],
+        edges: [
+          flowEdge(s.id, planner.id),
+          flowEdge(planner.id, executor.id),
+          conditionalEdge(executor.id, e.id, "plan complete"),
+          loopEdge(executor.id, planner.id, 10),
         ],
-        edges: [],
-        entryPoint: stepId,
-        exitPoint: stepId,
+        entryPoint: s.id, exitPoint: e.id,
+      };
+    },
+  },
+  {
+    id: "validator_loop",
+    label: "Validator Loop",
+    description: "Generate then validate, retry if needed.",
+    useCase: "Content generation, code review loops",
+    preview: "START → Generate ↔ Validate → END",
+    color: "bg-teal-500",
+    graph: () => {
+      const s = startNode("tpl-val-start", 50, 250);
+      const gen = nodeFactory("tpl-val-gen", "Generator", 230, 250, { systemPrompt: "Generate the requested output." });
+      const val = toolNode("tpl-val-validator", "Validator", 470, 250);
+      const e = endNode("tpl-val-end", 710, 250);
+      return {
+        nodes: [s, gen, val, e],
+        edges: [
+          flowEdge(s.id, gen.id),
+          flowEdge(gen.id, val.id),
+          conditionalEdge(val.id, e.id, "passed"),
+          loopEdge(val.id, gen.id, 3),
+        ],
+        entryPoint: s.id, exitPoint: e.id,
+      };
+    },
+  },
+  {
+    id: "orchestrator",
+    label: "Orchestrator",
+    description: "Central coordinator dispatches to specialists.",
+    useCase: "Complex tasks requiring multiple skills",
+    preview: "START → Orch ↔ [Specialists] → END",
+    color: "bg-indigo-500",
+    graph: () => {
+      const s = startNode("tpl-orch-start", 50, 250);
+      const orch = nodeFactory("tpl-orch-main", "Orchestrator", 230, 250, {
+        systemPrompt: "Coordinate the task. Decide which specialist to dispatch to next, or if the task is complete.",
+      });
+      const researcher = nodeFactory("tpl-orch-research", "Researcher", 480, 100, { systemPrompt: "Research the topic thoroughly." });
+      const writer = nodeFactory("tpl-orch-writer", "Writer", 480, 250, { systemPrompt: "Write the content." });
+      const coder = nodeFactory("tpl-orch-coder", "Coder", 480, 400, { systemPrompt: "Write or review code." });
+      const e = endNode("tpl-orch-end", 730, 250);
+      return {
+        nodes: [s, orch, researcher, writer, coder, e],
+        edges: [
+          flowEdge(s.id, orch.id),
+          conditionalEdge(orch.id, researcher.id, "needs research"),
+          conditionalEdge(orch.id, writer.id, "needs writing"),
+          conditionalEdge(orch.id, coder.id, "needs code"),
+          conditionalEdge(orch.id, e.id, "all done"),
+          loopEdge(researcher.id, orch.id), loopEdge(writer.id, orch.id), loopEdge(coder.id, orch.id),
+        ],
+        entryPoint: s.id, exitPoint: e.id,
+      };
+    },
+  },
+  {
+    id: "tool_pipeline",
+    label: "Tool Pipeline (No LLM)",
+    description: "Pure tool chain, zero AI.",
+    useCase: "Data pipelines, ETL, automation",
+    preview: "START → Fetch → Transform → Write → END",
+    color: "bg-slate-500",
+    graph: () => {
+      const s = startNode("tpl-pipe-start", 50, 250);
+      const fetch = toolNode("tpl-pipe-fetch", "Fetch Data", 220, 250);
+      const transform = toolNode("tpl-pipe-transform", "Transform", 420, 250);
+      const write = toolNode("tpl-pipe-write", "Write Output", 620, 250);
+      const e = endNode("tpl-pipe-end", 810, 250);
+      return {
+        nodes: [s, fetch, transform, write, e],
+        edges: [flowEdge(s.id, fetch.id), flowEdge(fetch.id, transform.id), flowEdge(transform.id, write.id), flowEdge(write.id, e.id)],
+        entryPoint: s.id, exitPoint: e.id,
       };
     },
   },

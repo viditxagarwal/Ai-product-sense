@@ -13,30 +13,30 @@ interface OnboardingStep {
 
 const STEPS: OnboardingStep[] = [
   {
-    title: "Agent Node",
+    title: "Agent Node (LLM ON)",
     description:
-      "This is your agent. It reasons about the task, picks tools to use, and observes results.",
+      "This is your agent. It has LLM enabled (blue) — it reasons about the task, picks tools, and observes results. Click it to configure the system prompt and bind tools.",
     icon: Box,
     color: "bg-blue-500",
   },
   {
-    title: "Decision Node",
+    title: "Loop Edge",
     description:
-      "This checks if the agent produced a final answer or needs to keep working.",
-    icon: GitBranch,
-    color: "bg-orange-500",
+      "The dashed cyan edge loops the agent back to itself until it produces a final answer or hits the max iteration limit.",
+    icon: RefreshCw,
+    color: "bg-cyan-500",
   },
   {
-    title: "Loopback Edge",
+    title: "Conditional Edge",
     description:
-      "If the agent isn't done, this edge loops it back to think and act again.",
-    icon: RefreshCw,
-    color: "bg-teal-500",
+      "The amber edge to END fires when the agent's answer is complete. Configure the condition in the edge inspector.",
+    icon: GitBranch,
+    color: "bg-amber-500",
   },
   {
     title: "Tool Bindings",
     description:
-      "Click the Agent node and toggle which tools it can use. That's all you need to configure.",
+      "Click the Agent node, find the Tools section in the inspector, and toggle which tools it can use. That's all you need to configure.",
     icon: Wrench,
     color: "bg-violet-500",
   },

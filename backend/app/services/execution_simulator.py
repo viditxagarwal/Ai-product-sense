@@ -625,6 +625,71 @@ def _sim_end(node, **_):
     }
 
 
+# ── New component-model types ─────────────────────────────
+
+@_reg("start")
+def _sim_start(node, **_):
+    return {
+        "output_payload": {"status": "workflow_started"},
+        "tokens": 0,
+        "result_summary": "Workflow started",
+    }
+
+
+@_reg("node")
+def _sim_node(node, **kwargs):
+    """Unified node type — dispatches based on llmEnabled."""
+    data = node.get("data", {})
+    llm_enabled = data.get("llmEnabled", True)
+    label = data.get("label", "Node")
+
+    if llm_enabled:
+        return {
+            "output_payload": {"response": f"LLM analysis completed for '{label}'."},
+            "tokens": random.randint(800, 2000),
+            "result_summary": f"LLM node '{label}' generated response",
+        }
+    else:
+        tools = data.get("boundTools", [])
+        return {
+            "output_payload": {"tools_executed": tools, "status": "tool_complete"},
+            "tokens": random.randint(50, 200),
+            "result_summary": f"Tool node '{label}' executed {len(tools)} tool(s)",
+        }
+
+
+@_reg("gate")
+def _sim_gate(node, **_):
+    """Gate node — human review checkpoint."""
+    return {
+        "output_payload": {"status": "auto_approved", "note": "Simulated gate approval"},
+        "tokens": 0,
+        "result_summary": "Gate auto-approved (simulated)",
+    }
+
+
+@_reg("split")
+def _sim_split(node, **_):
+    """Split node — parallel execution."""
+    data = node.get("data", {})
+    branch_count = data.get("branchCount", 3)
+    merge_method = data.get("mergeMethod", "concatenate")
+    return {
+        "output_payload": {"branches_executed": branch_count, "merge_method": merge_method},
+        "tokens": random.randint(200, 500),
+        "result_summary": f"Split: {branch_count} branches, merged via {merge_method}",
+    }
+
+
+# ── Backward-compat aliases ──────────────────────────────
+# Map old type names to the new simulators
+NODE_SIMULATORS["step"] = _sim_node
+NODE_SIMULATORS["classifier"] = _sim_node
+NODE_SIMULATORS["human_checkpoint"] = _sim_gate
+NODE_SIMULATORS["decision"] = _sim_route
+NODE_SIMULATORS["parallel"] = _sim_split
+
+
 def _default_sim(node, **_):
     return {
         "output_payload": {"result": "Step completed"},
@@ -802,7 +867,9 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
                 })
 
             # Generate simulated output (with context for file_writer)
-            simulator = NODE_SIMULATORS.get(node_type, _default_sim)
+            # Check componentType first (new model), fall back to node type (old model)
+            component_type = node.get("data", {}).get("componentType", node_type)
+            simulator = NODE_SIMULATORS.get(component_type) or NODE_SIMULATORS.get(node_type, _default_sim)
             sim_result = simulator(node, context=context)
 
             tokens = sim_result.get("tokens", 100)

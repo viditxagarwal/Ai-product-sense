@@ -55,6 +55,119 @@ export type ErrorHandlingStrategy =
   | "skip_node"
   | "fallback_path";
 
+// Component types on canvas
+export type WorkflowComponentType = 'node' | 'gate' | 'split' | 'start' | 'end';
+
+// Edge types
+export type WorkflowEdgeType = 'flow' | 'conditional' | 'loop';
+
+// Condition evaluation methods
+export type ConditionMethod = 'rule_based' | 'llm_evaluation' | 'score_comparison' | 'regex_match' | 'always';
+
+// The universal Node's data
+export interface WorkflowNodeData {
+  label: string;
+  componentType: WorkflowComponentType;
+  /** @deprecated Use componentType instead. Kept for backward compat. */
+  nodeType?: string;
+
+  // === Node-specific (componentType === 'node') ===
+  llmEnabled?: boolean;
+  systemPrompt?: string;
+  promptVersionId?: string;
+  modelOverride?: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+  boundTools?: string[];
+  inputContext?: 'user_message' | 'previous_step' | 'full_history' | 'custom';
+  customContextTemplate?: string;
+  selectedToolId?: string;
+  toolConfig?: Record<string, unknown>;
+  inputMapping?: string;
+
+  // === Gate-specific (componentType === 'gate') ===
+  reviewDisplay?: string[];
+  reviewInstructions?: string;
+  displayFormat?: 'full_text' | 'summary_detail' | 'side_by_side';
+  availableActions?: {
+    approve: boolean;
+    rejectWithReason: boolean;
+    editAndApprove: boolean;
+    sendBackForRevision: boolean;
+    addCommentAndContinue: boolean;
+  };
+  onReject?: 'stop' | 'route_to_fallback' | 'retry_previous';
+  waitDuration?: string;
+  onTimeout?: 'auto_approve' | 'auto_reject' | 'escalate' | 'stop';
+  escalateTo?: string;
+  notifyVia?: string[];
+  notificationTemplate?: string;
+
+  // === Split-specific (componentType === 'split') ===
+  branchCount?: number;
+  fanOutMethod?: 'same_input' | 'split_input' | 'custom_per_branch';
+  branchPrompts?: string[];
+  mergeMethod?: 'concatenate' | 'summarize' | 'best_of_n' | 'vote' | 'custom';
+  mergePrompt?: string;
+  mergeModel?: string;
+  waitStrategy?: 'wait_all' | 'first_n' | 'timeout_best';
+  branchTimeout?: number;
+  maxConcurrent?: number;
+  onBranchFailure?: 'continue' | 'retry' | 'stop_all';
+
+  // === Error handling (all node types) ===
+  timeoutSeconds?: number;
+  onFailure?: 'retry_once' | 'skip_warning' | 'stop' | 'fallback';
+  fallbackValue?: string;
+
+  // === Legacy fields (backward compat) ===
+  purpose?: string;
+  systemPromptHint?: string;
+  onMissingData?: string;
+  onToolFailure?: string;
+  onLowConfidence?: string;
+  guardrailOverride?: string;
+  conditionType?: string;
+  conditionPrompt?: string;
+  pathMappings?: string;
+  maxBranches?: number;
+  displayContent?: string;
+  humanOptions?: string;
+  timeoutBehavior?: string;
+  timeoutMinutes?: number;
+  retrievalSource?: string;
+  topK?: number;
+  rerankingEnabled?: boolean;
+  knowledgeLayers?: string;
+  [key: string]: unknown;
+}
+
+// Edge data stored in graph_data
+export interface WorkflowEdgeData {
+  [key: string]: unknown; // index signature for React Flow compat
+  edgeType: WorkflowEdgeType;
+  label?: string;
+
+  // === Conditional edge ===
+  conditionMethod?: ConditionMethod;
+  ruleField?: string;
+  ruleOperator?: 'equals' | 'contains' | 'greater_than' | 'less_than' | 'is_empty' | 'is_not_empty';
+  ruleValue?: string;
+  conditionPrompt?: string;
+  evaluatorModel?: string;
+  confidenceThreshold?: number;
+  scoreField?: string;
+  scoreOperator?: '>' | '>=' | '<' | '<=' | '==';
+  scoreThreshold?: number;
+  regexPattern?: string;
+  regexMatchField?: 'full_output' | 'specific_field';
+
+  // === Loop edge ===
+  maxIterations?: number;
+  exitThreshold?: number;
+  onMaxReached?: 'use_best' | 'use_last' | 'stop_error' | 'route_fallback';
+}
+
 export interface GraphData {
   nodes: Record<string, unknown>[];
   edges: Record<string, unknown>[];

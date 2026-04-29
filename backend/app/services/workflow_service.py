@@ -80,3 +80,84 @@ def delete_workflow(user_id: UUID, workflow_id: UUID) -> dict:
     get_workflow(user_id, workflow_id)
     supabase.table("workflows").delete().eq("id", str(workflow_id)).execute()
     return {"success": True}
+
+
+# ── Graph validation ─────────────────────────────────────
+
+VALID_COMPONENT_TYPES = {"start", "end", "node", "gate", "split"}
+VALID_EDGE_TYPES = {"flow", "conditional", "loop"}
+
+
+def validate_graph(graph_data: dict) -> dict:
+    """Validate a workflow graph and return errors/warnings.
+
+    Returns {"valid": bool, "errors": [...], "warnings": [...]}.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    nodes = graph_data.get("nodes", [])
+    edges = graph_data.get("edges", [])
+
+    if not nodes:
+        errors.append("Graph has no nodes")
+        return {"valid": False, "errors": errors, "warnings": warnings}
+
+    node_ids = {n["id"] for n in nodes}
+
+    # Check START/END presence
+    start_nodes = [n for n in nodes if n.get("type") == "start" or n.get("data", {}).get("componentType") == "start"]
+    end_nodes = [n for n in nodes if n.get("type") == "end" or n.get("data", {}).get("componentType") == "end"]
+
+    if len(start_nodes) == 0:
+        errors.append("Graph must have a START node")
+    elif len(start_nodes) > 1:
+        errors.append("Graph must have exactly one START node")
+
+    if len(end_nodes) == 0:
+        errors.append("Graph must have an END node")
+    elif len(end_nodes) > 1:
+        errors.append("Graph must have exactly one END node")
+
+    # Check componentType on all nodes
+    for n in nodes:
+        ct = n.get("data", {}).get("componentType", n.get("type", ""))
+        if ct and ct not in VALID_COMPONENT_TYPES:
+            # Allow legacy types — just warn
+            warnings.append(f"Node '{n.get('data', {}).get('label', n['id'])}' has legacy type '{ct}'")
+
+    # Validate edges reference existing nodes
+    for e in edges:
+        src = e.get("source")
+        tgt = e.get("target")
+        if src not in node_ids:
+            errors.append(f"Edge '{e.get('id', '?')}' references missing source node '{src}'")
+        if tgt not in node_ids:
+            errors.append(f"Edge '{e.get('id', '?')}' references missing target node '{tgt}'")
+
+    # Check no edges TO start or FROM end
+    for e in edges:
+        tgt = e.get("target")
+        src = e.get("source")
+        tgt_node = next((n for n in nodes if n["id"] == tgt), None)
+        src_node = next((n for n in nodes if n["id"] == src), None)
+        if tgt_node and (tgt_node.get("type") == "start" or tgt_node.get("data", {}).get("componentType") == "start"):
+            warnings.append(f"Edge targets START node (unusual)")
+        if src_node and (src_node.get("type") == "end" or src_node.get("data", {}).get("componentType") == "end"):
+            warnings.append(f"Edge originates from END node (unusual)")
+
+    # Check for disconnected nodes (no incoming AND no outgoing edges, excluding start/end)
+    connected = set()
+    for e in edges:
+        connected.add(e.get("source"))
+        connected.add(e.get("target"))
+    for n in nodes:
+        ct = n.get("data", {}).get("componentType", n.get("type", ""))
+        if ct not in ("start", "end") and n["id"] not in connected:
+            warnings.append(f"Node '{n.get('data', {}).get('label', n['id'])}' is disconnected")
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+    }

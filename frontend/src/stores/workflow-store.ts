@@ -7,11 +7,17 @@ import type {
   PaginatedResponse,
 } from "@/types";
 
+interface SelectedElement {
+  type: 'node' | 'edge';
+  id: string;
+}
+
 interface WorkflowStore {
   workflows: WorkflowResponse[];
   currentWorkflow: WorkflowResponse | null;
   loading: boolean;
   error: string | null;
+  selectedElement: SelectedElement | null;
 
   fetchWorkflows: (domainId?: string) => Promise<void>;
   fetchWorkflow: (id: string) => Promise<void>;
@@ -21,6 +27,7 @@ interface WorkflowStore {
     data: WorkflowUpdate
   ) => Promise<WorkflowResponse>;
   deleteWorkflow: (id: string) => Promise<void>;
+  setSelectedElement: (el: SelectedElement | null) => void;
   clearError: () => void;
 }
 
@@ -29,6 +36,7 @@ export const useWorkflowStore = create<WorkflowStore>((set) => ({
   currentWorkflow: null,
   loading: false,
   error: null,
+  selectedElement: null,
 
   fetchWorkflows: async (domainId?: string) => {
     set({ loading: true, error: null });
@@ -95,5 +103,6 @@ export const useWorkflowStore = create<WorkflowStore>((set) => ({
     }
   },
 
+  setSelectedElement: (el) => set({ selectedElement: el }),
   clearError: () => set({ error: null }),
 }));

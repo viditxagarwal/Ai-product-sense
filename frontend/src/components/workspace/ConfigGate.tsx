@@ -188,7 +188,7 @@ export default function ConfigGate() {
             </option>
             {workflows.map((wf) => (
               <option key={wf.id} value={wf.id}>
-                {wf.workflow_name} · {wf.graph_data?.nodes?.length ?? 0} nodes
+                {wf.workflow_name} · {(wf.graph_data?.nodes ?? []).filter((n: Record<string, unknown>) => !["start", "end"].includes(n.type as string)).length} nodes
               </option>
             ))}
           </select>
