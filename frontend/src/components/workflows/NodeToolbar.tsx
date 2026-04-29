@@ -1,6 +1,12 @@
 "use client";
 
 import { NODE_TYPE_CONFIGS } from "./nodeTypes";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface NodeToolbarProps {
   onAddNode: (nodeType: string) => void;
@@ -16,38 +22,46 @@ export default function NodeToolbar({ onAddNode }: NodeToolbarProps) {
   };
 
   return (
-    <div className="flex w-48 shrink-0 flex-col border-r border-slate-200 bg-white">
-      <div className="border-b border-slate-200 px-3 py-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-          Node Types
-        </h3>
+    <TooltipProvider delayDuration={400}>
+      <div className="flex w-48 shrink-0 flex-col border-r border-slate-200 bg-white">
+        <div className="border-b border-slate-200 px-3 py-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Node Types
+          </h3>
+        </div>
+        <div className="flex-1 space-y-1 overflow-y-auto p-2">
+          {NODE_TYPE_CONFIGS.map((config) => {
+            const Icon = config.icon;
+            return (
+              <Tooltip key={config.type}>
+                <TooltipTrigger asChild>
+                  <div
+                    draggable
+                    onDragStart={(e) => onDragStart(e, config.type)}
+                    onClick={() => onAddNode(config.type)}
+                    className={`flex cursor-grab items-center gap-2.5 rounded-md border border-slate-200 px-3 py-2 text-xs font-medium transition-colors hover:bg-slate-50 active:cursor-grabbing ${config.textColor}`}
+                  >
+                    <div
+                      className={`flex size-6 items-center justify-center rounded ${config.color}`}
+                    >
+                      <Icon className="size-3.5 text-white" />
+                    </div>
+                    <span className="text-slate-700">{config.label}</span>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-[220px] text-xs">
+                  {config.tooltip}
+                </TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </div>
+        <div className="border-t border-slate-200 p-2">
+          <p className="text-[10px] text-slate-400">
+            Drag onto canvas or click to add
+          </p>
+        </div>
       </div>
-      <div className="flex-1 space-y-1 overflow-y-auto p-2">
-        {NODE_TYPE_CONFIGS.map((config) => {
-          const Icon = config.icon;
-          return (
-            <div
-              key={config.type}
-              draggable
-              onDragStart={(e) => onDragStart(e, config.type)}
-              onClick={() => onAddNode(config.type)}
-              className={`flex cursor-grab items-center gap-2.5 rounded-md border border-slate-200 px-3 py-2 text-xs font-medium transition-colors hover:bg-slate-50 active:cursor-grabbing ${config.textColor}`}
-            >
-              <div
-                className={`flex size-6 items-center justify-center rounded ${config.color}`}
-              >
-                <Icon className="size-3.5 text-white" />
-              </div>
-              <span className="text-slate-700">{config.label}</span>
-            </div>
-          );
-        })}
-      </div>
-      <div className="border-t border-slate-200 p-2">
-        <p className="text-[10px] text-slate-400">
-          Drag onto canvas or click to add
-        </p>
-      </div>
-    </div>
+    </TooltipProvider>
   );
 }

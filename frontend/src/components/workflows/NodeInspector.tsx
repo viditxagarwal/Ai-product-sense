@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { NODE_TYPE_MAP } from "./nodeTypes";
+import { NODE_TYPE_MAP, resolveNodeType } from "./nodeTypes";
 import { useToolStore } from "@/stores/tool-store";
 import ModelSelect from "@/components/shared/ModelSelect";
 import { useAvailableModels } from "@/hooks/useAvailableModels";
@@ -46,8 +46,8 @@ export default function NodeInspector({
   }, [loaded, tools.length, fetchTools]);
 
   const data = (node?.data ?? {}) as unknown as WorkflowNodeData;
-  const nodeType = data.nodeType || "agent_node";
-  const config = NODE_TYPE_MAP[nodeType] || NODE_TYPE_MAP["agent_node"];
+  const nodeType = resolveNodeType(data.nodeType || "step");
+  const config = NODE_TYPE_MAP[nodeType] || NODE_TYPE_MAP["step"];
 
   const update = useCallback(
     (field: string, value: unknown) => {
@@ -112,125 +112,191 @@ export default function NodeInspector({
           />
         </div>
 
-        {/* Bound Tools */}
-        <div className="space-y-2">
-          <Label className="text-xs">Bound Tools</Label>
-          <p className="text-[10px] text-muted-foreground">
-            Enable tools available to this node at runtime.
-          </p>
-          <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-2">
-            {enabledTools.length === 0 ? (
-              <p className="py-2 text-center text-[10px] text-slate-400">
-                No enabled tools. Enable tools in the Tool Registry.
+        {/* Bound Tools — shown for Step and Decision */}
+        {(nodeType === "step" || nodeType === "decision") && (
+          <div className="space-y-2">
+            <Label className="text-xs">Bound Tools</Label>
+            <p className="text-[10px] text-muted-foreground">
+              Enable tools available to this node at runtime.
+            </p>
+            <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-2">
+              {enabledTools.length === 0 ? (
+                <p className="py-2 text-center text-[10px] text-slate-400">
+                  No enabled tools. Enable tools in the Tool Registry.
+                </p>
+              ) : (
+                enabledTools.map((tool) => {
+                  const bound = ((data.boundTools as string[]) || []).includes(
+                    tool.id
+                  );
+                  return (
+                    <div
+                      key={tool.id}
+                      className="flex items-center justify-between rounded px-2 py-1 hover:bg-slate-50"
+                    >
+                      <span className="text-xs">{tool.display_name}</span>
+                      <Switch
+                        checked={bound}
+                        onCheckedChange={() => toggleTool(tool.id)}
+                      />
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Per-node conditions — shown for Step */}
+        {nodeType === "step" && (
+          <div className="space-y-3">
+            <Label className="text-xs font-semibold">Conditions</Label>
+
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-slate-500">On Missing Data</Label>
+              <Select
+                value={(data.onMissingData as string) || "flag"}
+                onValueChange={(v) => update("onMissingData", v)}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="skip">Skip</SelectItem>
+                  <SelectItem value="flag">Flag</SelectItem>
+                  <SelectItem value="halt">Halt</SelectItem>
+                  <SelectItem value="ask_user">Ask User</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-slate-500">On Tool Failure</Label>
+              <Select
+                value={(data.onToolFailure as string) || "retry"}
+                onValueChange={(v) => update("onToolFailure", v)}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="retry">Retry</SelectItem>
+                  <SelectItem value="skip">Skip</SelectItem>
+                  <SelectItem value="fallback">Fallback</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-slate-500">On Low Confidence</Label>
+              <Select
+                value={(data.onLowConfidence as string) || "proceed"}
+                onValueChange={(v) => update("onLowConfidence", v)}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="proceed">Proceed</SelectItem>
+                  <SelectItem value="flag">Flag</SelectItem>
+                  <SelectItem value="halt">Halt</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        )}
+
+        {/* Model Override — shown for Step and Decision */}
+        {(nodeType === "step" || nodeType === "decision") && (
+          <div className="space-y-1.5">
+            <Label className="text-xs">Model Override (optional)</Label>
+            <ModelSelect
+              value={(data.modelOverride as string) || ""}
+              onValueChange={(v) => update("modelOverride", v)}
+              providers={providers}
+              allowNone
+              noneLabel="Use Configuration Default"
+              className="h-8 text-xs"
+            />
+          </div>
+        )}
+
+        {/* Guardrail Override — shown for Step */}
+        {nodeType === "step" && (
+          <div className="space-y-1.5">
+            <Label className="text-xs">Guardrail Override (optional)</Label>
+            <Input
+              value={(data.guardrailOverride as string) || ""}
+              onChange={(e) => update("guardrailOverride", e.target.value)}
+              placeholder="e.g., never_fabricate=strict"
+              className="h-8 text-xs"
+            />
+          </div>
+        )}
+
+        {/* ─── Decision-specific fields ─── */}
+        {nodeType === "decision" && (
+          <div className="space-y-3 rounded-md border border-orange-200 bg-orange-50/50 p-3">
+            <Label className="text-xs font-semibold text-orange-700">
+              Decision Settings
+            </Label>
+
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-slate-500">Condition Type</Label>
+              <Select
+                value={(data.conditionType as string) || "rule_based"}
+                onValueChange={(v) => update("conditionType", v)}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="rule_based">Rule-based</SelectItem>
+                  <SelectItem value="llm_classification">LLM Classification</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-slate-500">
+                {(data.conditionType as string) === "llm_classification"
+                  ? "Classification Prompt"
+                  : "Condition Expression"}
+              </Label>
+              <Textarea
+                value={(data.conditionPrompt as string) || ""}
+                onChange={(e) => update("conditionPrompt", e.target.value)}
+                placeholder={
+                  (data.conditionType as string) === "llm_classification"
+                    ? "Classify the input into one of: positive, negative, neutral"
+                    : "e.g., output.confidence > 0.8"
+                }
+                rows={3}
+                className="text-xs"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-slate-500">Path Mappings</Label>
+              <Textarea
+                value={(data.pathMappings as string) || ""}
+                onChange={(e) => update("pathMappings", e.target.value)}
+                placeholder={"positive → Step A\nnegative → Step B\ndefault → Step C"}
+                rows={3}
+                className="text-xs"
+              />
+              <p className="text-[10px] text-slate-400">
+                One mapping per line: condition → target node
               </p>
-            ) : (
-              enabledTools.map((tool) => {
-                const bound = ((data.boundTools as string[]) || []).includes(
-                  tool.id
-                );
-                return (
-                  <div
-                    key={tool.id}
-                    className="flex items-center justify-between rounded px-2 py-1 hover:bg-slate-50"
-                  >
-                    <span className="text-xs">{tool.display_name}</span>
-                    <Switch
-                      checked={bound}
-                      onCheckedChange={() => toggleTool(tool.id)}
-                    />
-                  </div>
-                );
-              })
-            )}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Per-node conditions */}
-        <div className="space-y-3">
-          <Label className="text-xs font-semibold">Conditions</Label>
-
-          <div className="space-y-1.5">
-            <Label className="text-[11px] text-slate-500">On Missing Data</Label>
-            <Select
-              value={(data.onMissingData as string) || "flag"}
-              onValueChange={(v) => update("onMissingData", v)}
-            >
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="skip">Skip</SelectItem>
-                <SelectItem value="flag">Flag</SelectItem>
-                <SelectItem value="halt">Halt</SelectItem>
-                <SelectItem value="ask_user">Ask User</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-[11px] text-slate-500">On Tool Failure</Label>
-            <Select
-              value={(data.onToolFailure as string) || "retry"}
-              onValueChange={(v) => update("onToolFailure", v)}
-            >
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="retry">Retry</SelectItem>
-                <SelectItem value="skip">Skip</SelectItem>
-                <SelectItem value="fallback">Fallback</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-[11px] text-slate-500">On Low Confidence</Label>
-            <Select
-              value={(data.onLowConfidence as string) || "proceed"}
-              onValueChange={(v) => update("onLowConfidence", v)}
-            >
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="proceed">Proceed</SelectItem>
-                <SelectItem value="flag">Flag</SelectItem>
-                <SelectItem value="halt">Halt</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        {/* Model Override */}
-        <div className="space-y-1.5">
-          <Label className="text-xs">Model Override (optional)</Label>
-          <ModelSelect
-            value={(data.modelOverride as string) || ""}
-            onValueChange={(v) => update("modelOverride", v)}
-            providers={providers}
-            allowNone
-            noneLabel="Use Configuration Default"
-            className="h-8 text-xs"
-          />
-        </div>
-
-        {/* Guardrail Override */}
-        <div className="space-y-1.5">
-          <Label className="text-xs">Guardrail Override (optional)</Label>
-          <Input
-            value={(data.guardrailOverride as string) || ""}
-            onChange={(e) => update("guardrailOverride", e.target.value)}
-            placeholder="e.g., never_fabricate=strict"
-            className="h-8 text-xs"
-          />
-        </div>
-
-        {/* Parallelization-specific fields */}
-        {nodeType === "parallelization" && (
+        {/* ─── Parallel-specific fields ─── */}
+        {nodeType === "parallel" && (
           <div className="space-y-3 rounded-md border border-purple-200 bg-purple-50/50 p-3">
             <Label className="text-xs font-semibold text-purple-700">
-              Parallelization Settings
+              Parallel Settings
             </Label>
 
             <div className="space-y-1.5">
@@ -282,68 +348,154 @@ export default function NodeInspector({
                 </SelectContent>
               </Select>
             </div>
-          </div>
-        )}
-
-        {/* Loop-specific fields */}
-        {nodeType === "loop" && (
-          <div className="space-y-3 rounded-md border border-teal-200 bg-teal-50/50 p-3">
-            <Label className="text-xs font-semibold text-teal-700">
-              Loop Settings
-            </Label>
 
             <div className="space-y-1.5">
-              <Label className="text-[11px] text-slate-500">Max Iterations</Label>
+              <Label className="text-[11px] text-slate-500">Max Branches</Label>
               <Input
                 type="number"
-                min={1}
-                max={50}
-                value={Number(data.maxIterations) || 5}
+                min={2}
+                max={20}
+                value={Number(data.maxBranches) || 5}
                 onChange={(e) =>
-                  update("maxIterations", parseInt(e.target.value, 10))
+                  update("maxBranches", parseInt(e.target.value, 10))
                 }
                 className="h-8 text-xs"
               />
             </div>
+          </div>
+        )}
+
+        {/* ─── Human Review-specific fields ─── */}
+        {nodeType === "human_review" && (
+          <div className="space-y-3 rounded-md border border-amber-200 bg-amber-50/50 p-3">
+            <Label className="text-xs font-semibold text-amber-700">
+              Human Review Settings
+            </Label>
 
             <div className="space-y-1.5">
-              <Label className="text-[11px] text-slate-500">Exit Condition</Label>
+              <Label className="text-[11px] text-slate-500">Display Content</Label>
+              <Textarea
+                value={(data.displayContent as string) || ""}
+                onChange={(e) => update("displayContent", e.target.value)}
+                placeholder="What should be shown to the human reviewer? e.g., AI output, confidence scores, sources"
+                rows={3}
+                className="text-xs"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-slate-500">Human Options</Label>
+              <Input
+                value={(data.humanOptions as string) || ""}
+                onChange={(e) => update("humanOptions", e.target.value)}
+                placeholder="approve, reject, edit, escalate"
+                className="h-8 text-xs"
+              />
+              <p className="text-[10px] text-slate-400">
+                Comma-separated action options for the reviewer
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-slate-500">Timeout Behavior</Label>
               <Select
-                value={(data.exitCondition as string) || "max_reached"}
-                onValueChange={(v) => update("exitCondition", v)}
+                value={(data.timeoutBehavior as string) || "wait"}
+                onValueChange={(v) => update("timeoutBehavior", v)}
               >
                 <SelectTrigger className="h-8 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="max_reached">Max Reached</SelectItem>
-                  <SelectItem value="quality_threshold">
-                    Quality Threshold
-                  </SelectItem>
-                  <SelectItem value="no_improvement">No Improvement</SelectItem>
-                  <SelectItem value="human_approval">Human Approval</SelectItem>
+                  <SelectItem value="wait">Wait Indefinitely</SelectItem>
+                  <SelectItem value="auto_approve">Auto-Approve</SelectItem>
+                  <SelectItem value="auto_reject">Auto-Reject</SelectItem>
+                  <SelectItem value="escalate">Escalate</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-[11px] text-slate-500">
-                Exit Threshold: {((Number(data.exitThreshold) || 0.8) * 100).toFixed(0)}%
-              </Label>
-              <input
-                type="range"
-                min="50"
-                max="100"
-                value={((Number(data.exitThreshold) || 0.8) * 100).toFixed(0)}
+              <Label className="text-[11px] text-slate-500">Timeout (minutes)</Label>
+              <Input
+                type="number"
+                min={0}
+                max={1440}
+                value={Number(data.timeoutMinutes) || 0}
                 onChange={(e) =>
-                  update("exitThreshold", parseInt(e.target.value, 10) / 100)
+                  update("timeoutMinutes", parseInt(e.target.value, 10))
                 }
-                className="w-full accent-teal-500"
+                className="h-8 text-xs"
               />
-              <div className="flex justify-between text-[10px] text-slate-400">
-                <span>50%</span>
-                <span>100%</span>
-              </div>
+              <p className="text-[10px] text-slate-400">
+                0 = no timeout (wait indefinitely)
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Retriever-specific fields ─── */}
+        {nodeType === "retriever" && (
+          <div className="space-y-3 rounded-md border border-green-200 bg-green-50/50 p-3">
+            <Label className="text-xs font-semibold text-green-700">
+              Retrieval Settings
+            </Label>
+
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-slate-500">Retrieval Source</Label>
+              <Select
+                value={(data.retrievalSource as string) || "knowledge_base"}
+                onValueChange={(v) => update("retrievalSource", v)}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="knowledge_base">Knowledge Base</SelectItem>
+                  <SelectItem value="active_files">Active Files</SelectItem>
+                  <SelectItem value="external">External Source</SelectItem>
+                  <SelectItem value="all">All Sources</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-slate-500">Number of Results (Top-K)</Label>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                value={Number(data.topK) || 5}
+                onChange={(e) =>
+                  update("topK", parseInt(e.target.value, 10))
+                }
+                className="h-8 text-xs"
+              />
+            </div>
+
+            <div className="flex items-center justify-between rounded px-1 py-1">
+              <Label className="text-[11px] text-slate-500">Enable Reranking</Label>
+              <Switch
+                checked={Boolean(data.rerankingEnabled)}
+                onCheckedChange={(v) => update("rerankingEnabled", v)}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-slate-500">Knowledge Layers</Label>
+              <Select
+                value={(data.knowledgeLayers as string) || "all"}
+                onValueChange={(v) => update("knowledgeLayers", v)}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Layers</SelectItem>
+                  <SelectItem value="enterprise_only">Enterprise Only</SelectItem>
+                  <SelectItem value="domain_only">Domain Only</SelectItem>
+                  <SelectItem value="user_uploaded">User Uploaded Only</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
         )}

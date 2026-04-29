@@ -2,32 +2,45 @@
 
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { NODE_TYPE_MAP } from "../nodeTypes";
+import { NODE_TYPE_MAP, resolveNodeType } from "../nodeTypes";
 
 export interface WorkflowNodeData {
   label: string;
   nodeType: string;
   purpose?: string;
   boundTools?: string[];
+  // Common
   onMissingData?: string;
   onToolFailure?: string;
   onLowConfidence?: string;
   modelOverride?: string;
   guardrailOverride?: string;
-  // Parallelization
+  // Decision
+  conditionType?: string;
+  conditionPrompt?: string;
+  pathMappings?: string;
+  // Parallel
   branchCount?: number;
   fanOutMethod?: string;
   mergeMethod?: string;
-  // Loop
-  maxIterations?: number;
-  exitCondition?: string;
-  exitThreshold?: number;
+  maxBranches?: number;
+  // Human Review
+  displayContent?: string;
+  humanOptions?: string;
+  timeoutBehavior?: string;
+  timeoutMinutes?: number;
+  // Retriever
+  retrievalSource?: string;
+  topK?: number;
+  rerankingEnabled?: boolean;
+  knowledgeLayers?: string;
   [key: string]: unknown;
 }
 
 function WorkflowNode({ data, selected }: NodeProps) {
   const nodeData = data as unknown as WorkflowNodeData;
-  const config = NODE_TYPE_MAP[nodeData.nodeType] || NODE_TYPE_MAP["agent_node"];
+  const resolved = resolveNodeType(nodeData.nodeType || "step");
+  const config = NODE_TYPE_MAP[resolved] || NODE_TYPE_MAP["step"];
   const Icon = config.icon;
 
   return (

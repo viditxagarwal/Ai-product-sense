@@ -56,6 +56,13 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
 
   const nodeTypes: NodeTypes = useMemo(
     () => ({
+      // New types
+      step: WorkflowNode,
+      decision: WorkflowNode,
+      parallel: WorkflowNode,
+      human_review: WorkflowNode,
+      retriever: WorkflowNode,
+      // Legacy types (backward compatibility for existing workflows)
       agent_node: WorkflowNode,
       route: WorkflowNode,
       parallelization: WorkflowNode,
@@ -63,7 +70,6 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
       plan_and_execute: WorkflowNode,
       human_checkpoint: WorkflowNode,
       classifier: WorkflowNode,
-      retriever: WorkflowNode,
       validator: WorkflowNode,
     }),
     []
