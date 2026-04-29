@@ -241,6 +241,12 @@ export default function ChatInput() {
           status: "running",
           step_count: (data.step_count as number) || 0,
         });
+        // Store config snapshot for config-driven rendering
+        if (data.config_snapshot) {
+          useExecutionStore.getState().setConfigSnapshot(
+            data.config_snapshot as Record<string, string>
+          );
+        }
         break;
       }
 

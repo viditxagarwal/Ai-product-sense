@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from app.database import supabase
 from app.services.llm_service import call_llm_streaming
+from app.services.prompt_injector import build_config_injections
 
 logger = logging.getLogger("ws.executor")
 
@@ -53,6 +54,18 @@ def _get_nodes_in_order(graph_data: dict) -> list[dict]:
     return ordered
 
 
+def _build_config_snapshot(ctx: dict) -> dict:
+    """Extract rendering-relevant config fields for the frontend."""
+    config = ctx.get("config") or {}
+    return {
+        "execution_trace_placement": config.get("execution_trace_placement", "inline_interleaved"),
+        "harness_display_mode": config.get("harness_display_mode", "sequential_visible"),
+        "intermediate_steps_in_chat": config.get("intermediate_steps_in_chat", "status_pills"),
+        "explanation_depth": config.get("explanation_depth", "reasoning_plus_sources"),
+        "confidence_display": config.get("confidence_display", "color_coded_bands"),
+    }
+
+
 # ══════════════════════════════════════════════════════════════
 # Resolve thread context
 # ══════════════════════════════════════════════════════════════
@@ -85,6 +98,12 @@ def _get_thread_context(thread_id: str) -> dict:
         pv = supabase.table("prompt_versions").select("content").eq("id", cfg.data["prompt_version_id"]).single().execute()
         if pv.data:
             system_prompt = pv.data.get("content", "")
+
+    # Inject config-driven response guidelines
+    if cfg.data:
+        config_injections = build_config_injections(cfg.data)
+        if config_injections:
+            system_prompt += config_injections
 
     # Thread instructions override
     if t.get("instructions"):
@@ -163,10 +182,13 @@ async def _direct_llm_call(
     }).execute()
     run_id = run.data[0]["id"]
 
+    config_snapshot = _build_config_snapshot(ctx)
+
     await send_event({
         "type": "run_started",
         "run_id": run_id,
         "step_count": 1,
+        "config_snapshot": config_snapshot,
     })
 
     # Show fallback warning
@@ -360,10 +382,13 @@ async def _execute_workflow_graph(
     }).execute()
     run_id = run.data[0]["id"]
 
+    config_snapshot = _build_config_snapshot(ctx)
+
     await send_event({
         "type": "run_started",
         "run_id": run_id,
         "step_count": len(nodes),
+        "config_snapshot": config_snapshot,
     })
 
     history = _get_conversation_history(thread_id)

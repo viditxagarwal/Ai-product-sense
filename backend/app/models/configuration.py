@@ -58,6 +58,9 @@ class ConfigurationCreate(BaseModel):
     citation_format: Literal['none', 'inline_parenthetical', 'footnotes', 'end_references', 'linked_highlights'] = 'inline_parenthetical'
     max_output_length: int = 4000
     chain_of_thought_visibility: Literal['always_show', 'always_hide', 'auto', 'user_toggleable'] = 'auto'
+    execution_trace_placement: Literal['inline_interleaved', 'top_status_bar', 'collapsible_below', 'side_panel', 'hidden_inspectable'] = 'inline_interleaved'
+    harness_display_mode: Literal['sequential_visible', 'collapsed_summary', 'final_only', 'all_expanded'] = 'sequential_visible'
+    intermediate_steps_in_chat: Literal['full_output', 'status_pills', 'progress_bar', 'none'] = 'status_pills'
 
     # 7.5 Routing & Control Flow
     routing_strategy: Literal['llm_based', 'rule_based', 'classifier_based', 'hybrid', 'semantic_router'] = 'hybrid'

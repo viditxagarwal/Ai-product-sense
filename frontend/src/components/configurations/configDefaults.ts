@@ -49,6 +49,9 @@ export const CONFIG_DEFAULTS: Record<string, unknown> = {
   citation_format: "inline_parenthetical",
   max_output_length: 4000,
   chain_of_thought_visibility: "auto",
+  execution_trace_placement: "inline_interleaved",
+  harness_display_mode: "sequential_visible",
+  intermediate_steps_in_chat: "status_pills",
 
   // Routing & Control Flow
   routing_strategy: "hybrid",

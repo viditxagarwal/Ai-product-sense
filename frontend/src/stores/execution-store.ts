@@ -20,6 +20,9 @@ interface ExecutionStore {
   isStreaming: boolean;
   runError: string | null;
 
+  // Configuration snapshot from execution_start event
+  configSnapshot: Record<string, string> | null;
+
   // Step-level streaming data
   stepProgress: Record<string, StepProgress>; // stepId → progress texts
   stepFileEvents: Record<string, StepFileEvent>; // stepId → file event
@@ -35,6 +38,7 @@ interface ExecutionStore {
   updateStep: (stepId: string, updates: Partial<ExecutionStep>) => void;
   appendStepProgress: (stepId: string, text: string) => void;
   setStepFileEvent: (stepId: string, event: StepFileEvent) => void;
+  setConfigSnapshot: (snapshot: Record<string, string> | null) => void;
   setStreaming: (streaming: boolean) => void;
   setRunError: (error: string | null) => void;
   clearActiveRun: () => void;
@@ -50,6 +54,7 @@ export const useExecutionStore = create<ExecutionStore>((set) => ({
   activeSteps: [],
   isStreaming: false,
   runError: null,
+  configSnapshot: null,
 
   stepProgress: {},
   stepFileEvents: {},
@@ -59,6 +64,8 @@ export const useExecutionStore = create<ExecutionStore>((set) => ({
   inspectorLoading: false,
 
   setActiveRun: (run) => set({ activeRun: run }),
+
+  setConfigSnapshot: (snapshot) => set({ configSnapshot: snapshot }),
 
   addStep: (step) =>
     set((s) => ({ activeSteps: [...s.activeSteps, step] })),
@@ -93,6 +100,7 @@ export const useExecutionStore = create<ExecutionStore>((set) => ({
       activeSteps: [],
       isStreaming: false,
       runError: null,
+      configSnapshot: null,
       stepProgress: {},
       stepFileEvents: {},
     }),

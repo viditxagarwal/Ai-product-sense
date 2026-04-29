@@ -441,6 +441,9 @@ export default function ConfigForm() {
           <SelectField label="Citation Format" fieldKey="citation_format" form={form} onChange={update} options={opts(["none", "inline_parenthetical", "footnotes", "end_references", "linked_highlights"])} />
           <NumberField label="Max Output Length" fieldKey="max_output_length" form={form} onChange={update} min={100} max={32000} step={100} />
           <SelectField label="Chain-of-Thought Visibility" fieldKey="chain_of_thought_visibility" form={form} onChange={update} options={opts(["always_show", "always_hide", "auto", "user_toggleable"])} />
+          <SelectField label="Execution Trace Placement" fieldKey="execution_trace_placement" form={form} onChange={update} options={opts(["inline_interleaved", "top_status_bar", "collapsible_below", "side_panel", "hidden_inspectable"])} description="Where execution traces appear in the chat" />
+          <SelectField label="Step Display Mode" fieldKey="harness_display_mode" form={form} onChange={update} options={opts(["sequential_visible", "collapsed_summary", "final_only", "all_expanded"])} description="How the execution harness card is shown" />
+          <SelectField label="Intermediate Steps" fieldKey="intermediate_steps_in_chat" form={form} onChange={update} options={opts(["full_output", "status_pills", "progress_bar", "none"])} description="How individual steps appear during execution" />
         </div>
       </ConfigSection>
 
