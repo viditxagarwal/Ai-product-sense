@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { X, Trash2 } from "lucide-react";
+import { X, Trash2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,11 +19,13 @@ import { NODE_TYPE_MAP, resolveNodeType } from "./nodeTypes";
 import { useToolStore } from "@/stores/tool-store";
 import ModelSelect from "@/components/shared/ModelSelect";
 import { useAvailableModels } from "@/hooks/useAvailableModels";
-import type { Node } from "@xyflow/react";
+import type { Node, Edge } from "@xyflow/react";
 import type { WorkflowNodeData } from "./CustomNodes/WorkflowNode";
+import type { LoopbackEdgeData } from "./LoopbackEdge";
 
 interface NodeInspectorProps {
   node: Node | null;
+  edges?: Edge[];
   onUpdate: (nodeId: string, data: Partial<WorkflowNodeData>) => void;
   onClose: () => void;
   onDeleteNode?: (node: Node) => void;
@@ -31,6 +33,7 @@ interface NodeInspectorProps {
 
 export default function NodeInspector({
   node,
+  edges = [],
   onUpdate,
   onClose,
   onDeleteNode,
@@ -93,6 +96,43 @@ export default function NodeInspector({
       </div>
 
       <div className="flex-1 space-y-5 overflow-y-auto p-4">
+        {/* Loop Target Badge */}
+        {node && (() => {
+          const loopbackEdges = edges.filter(
+            (e) => e.type === "loopback" && e.target === node.id
+          );
+          if (loopbackEdges.length === 0) return null;
+          return (
+            <div className="space-y-2">
+              {loopbackEdges.map((le) => {
+                const leData = (le.data || {}) as LoopbackEdgeData;
+                return (
+                  <div
+                    key={le.id}
+                    className="flex items-start gap-2 rounded-md border border-teal-200 bg-teal-50/50 p-2.5"
+                  >
+                    <RefreshCw className="mt-0.5 size-3.5 shrink-0 text-teal-600" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <Badge className="bg-teal-500 text-[9px] text-white hover:bg-teal-500">
+                          Loop Target
+                        </Badge>
+                        <span className="text-[10px] text-teal-600">
+                          {leData.loopCondition || "quality_threshold"}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[10px] text-teal-700">
+                        Max {leData.maxIterations ?? 3} iterations · Exit at{" "}
+                        {((leData.exitThreshold ?? 0.85) * 100).toFixed(0)}%
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+
         {/* Name */}
         <div className="space-y-1.5">
           <Label className="text-xs">Node Name</Label>

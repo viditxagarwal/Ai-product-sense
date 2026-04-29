@@ -43,13 +43,88 @@ import {
 import { useWorkflowStore } from "@/stores/workflow-store";
 import NodeToolbar from "./NodeToolbar";
 import NodeInspector from "./NodeInspector";
+import EdgeInspector from "./EdgeInspector";
 import WorkflowNode from "./CustomNodes/WorkflowNode";
 import DeletableEdge from "./CustomEdge";
+import LoopbackEdge from "./LoopbackEdge";
+import type { LoopbackEdgeData } from "./LoopbackEdge";
 import { NODE_TYPE_MAP } from "./nodeTypes";
 import type { WorkflowNodeData } from "./CustomNodes/WorkflowNode";
 
 interface WorkflowCanvasProps {
   workflowId: string;
+}
+
+// ─── Helpers ───
+
+/** Check if target is "upstream" of source based on Y position (lower Y = earlier in flow) */
+function isLoopback(
+  sourceId: string,
+  targetId: string,
+  nodes: Node[]
+): boolean {
+  const sourceNode = nodes.find((n) => n.id === sourceId);
+  const targetNode = nodes.find((n) => n.id === targetId);
+  if (!sourceNode || !targetNode) return false;
+  // Target is above (earlier) than source in canvas = loopback
+  return targetNode.position.y < sourceNode.position.y;
+}
+
+/**
+ * Migrate legacy "loop" nodes into loopback edges.
+ * For each loop node: find its incoming and outgoing edges,
+ * create a loopback edge from the node before it back to the node
+ * the loop was supposed to target (the node it points to).
+ * If loop node has A→Loop and Loop→B, we create B→A loopback and remove the loop node.
+ * If it only has one side, just remove the loop node and reconnect.
+ */
+function migrateLoopNodes(
+  loadedNodes: Node[],
+  loadedEdges: Edge[]
+): { nodes: Node[]; edges: Edge[] } {
+  const loopNodes = loadedNodes.filter(
+    (n) => n.type === "loop" || (n.data as WorkflowNodeData)?.nodeType === "loop"
+  );
+
+  if (loopNodes.length === 0) return { nodes: loadedNodes, edges: loadedEdges };
+
+  let migratedNodes = [...loadedNodes];
+  let migratedEdges = [...loadedEdges];
+
+  for (const loopNode of loopNodes) {
+    const incoming = migratedEdges.filter((e) => e.target === loopNode.id);
+    const outgoing = migratedEdges.filter((e) => e.source === loopNode.id);
+
+    // Remove loop node
+    migratedNodes = migratedNodes.filter((n) => n.id !== loopNode.id);
+    // Remove edges to/from loop node
+    migratedEdges = migratedEdges.filter(
+      (e) => e.source !== loopNode.id && e.target !== loopNode.id
+    );
+
+    // Create loopback edge: from the source of incoming edges
+    // back to the target of outgoing edges
+    if (incoming.length > 0 && outgoing.length > 0) {
+      const sourceId = incoming[0].source; // node before loop
+      const targetId = outgoing[0].target; // node loop points to
+      migratedEdges.push({
+        id: `loopback-${sourceId}-${targetId}-${Date.now()}`,
+        source: sourceId,
+        target: targetId,
+        type: "loopback",
+        animated: false,
+        data: {
+          label: "Loop",
+          loopCondition: "quality_threshold",
+          maxIterations: 3,
+          exitThreshold: 0.85,
+          exitNodeId: "",
+        },
+      });
+    }
+  }
+
+  return { nodes: migratedNodes, edges: migratedEdges };
 }
 
 export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
@@ -60,6 +135,7 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([] as Node[]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([] as Edge[]);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [workflowName, setWorkflowName] = useState("");
   const [entryPoint, setEntryPoint] = useState("");
   const [exitPoint, setExitPoint] = useState("");
@@ -101,6 +177,7 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
   const edgeTypes: EdgeTypes = useMemo(
     () => ({
       deletable: DeletableEdge,
+      loopback: LoopbackEdge,
     }),
     []
   );
@@ -113,7 +190,7 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
     fetchWorkflow(workflowId);
   }, [workflowId, fetchWorkflow]);
 
-  // Load graph data from workflow
+  // Load graph data from workflow (with migration)
   useEffect(() => {
     if (!currentWorkflow) return;
     setWorkflowName(currentWorkflow.workflow_name);
@@ -121,17 +198,22 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
     setExitPoint(currentWorkflow.exit_point || "");
 
     const gd = currentWorkflow.graph_data;
-    if (gd && gd.nodes) {
-      setNodes(gd.nodes as Node[]);
-    }
-    if (gd && gd.edges) {
-      // Ensure existing edges use the deletable type
-      const edgesWithType = (gd.edges as Edge[]).map((e) => ({
-        ...e,
-        type: "deletable",
-      }));
-      setEdges(edgesWithType);
-    }
+    let loadedNodes = (gd?.nodes || []) as Node[];
+    let loadedEdges = (gd?.edges || []) as Edge[];
+
+    // Migrate legacy loop nodes to loopback edges
+    const migrated = migrateLoopNodes(loadedNodes, loadedEdges);
+    loadedNodes = migrated.nodes;
+    loadedEdges = migrated.edges;
+
+    // Ensure edge types
+    loadedEdges = loadedEdges.map((e) => ({
+      ...e,
+      type: e.type === "loopback" ? "loopback" : "deletable",
+    }));
+
+    setNodes(loadedNodes);
+    setEdges(loadedEdges);
   }, [currentWorkflow, setNodes, setEdges]);
 
   // Auto-save debounce: 5 seconds after changes
@@ -199,19 +281,57 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
     };
   }, []);
 
+  // ─── Connection handler: detect loopback ───
   const onConnect = useCallback(
     (connection: Connection) => {
-      setEdges((eds) =>
-        addEdge(
-          {
-            ...connection,
-            type: "deletable",
-            animated: true,
-            style: { strokeWidth: 2 },
-          },
-          eds
-        )
+      if (!connection.source || !connection.target) return;
+
+      const loopback = isLoopback(
+        connection.source,
+        connection.target,
+        nodesRef.current
       );
+
+      if (loopback) {
+        // Create a loopback edge
+        const newEdge: Edge = {
+          id: `loopback-${connection.source}-${connection.target}-${Date.now()}`,
+          source: connection.source,
+          target: connection.target,
+          sourceHandle: connection.sourceHandle ?? undefined,
+          targetHandle: connection.targetHandle ?? undefined,
+          type: "loopback",
+          animated: false,
+          data: {
+            label: "Loop",
+            loopCondition: "quality_threshold",
+            maxIterations: 3,
+            exitThreshold: 0.85,
+            exitNodeId: "",
+          } as LoopbackEdgeData,
+        };
+        setEdges((eds) => [...eds, newEdge]);
+        toast.info("Loopback detected! Configure loop settings in the inspector.");
+
+        // Auto-select the edge to open inspector
+        setSelectedNode(null);
+        // We need to find it after state update
+        setTimeout(() => {
+          setSelectedEdge(newEdge);
+        }, 50);
+      } else {
+        setEdges((eds) =>
+          addEdge(
+            {
+              ...connection,
+              type: "deletable",
+              animated: true,
+              style: { strokeWidth: 2 },
+            },
+            eds
+          )
+        );
+      }
     },
     [setEdges]
   );
@@ -219,29 +339,38 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
       setSelectedNode(node);
+      setSelectedEdge(null);
+    },
+    []
+  );
+
+  const onEdgeClick = useCallback(
+    (_: React.MouseEvent, edge: Edge) => {
+      if (edge.type === "loopback") {
+        setSelectedEdge(edge);
+        setSelectedNode(null);
+      }
     },
     []
   );
 
   const onPaneClick = useCallback(() => {
     setSelectedNode(null);
+    setSelectedEdge(null);
     setContextMenu(null);
   }, []);
 
   // ─── Deletion helpers ───
 
-  /** Delete a node by id, auto-reconnect surrounding nodes, update entry/exit */
   const deleteNodeById = useCallback(
     (nodeId: string) => {
       const incomingEdges = edgesRef.current.filter((e) => e.target === nodeId);
       const outgoingEdges = edgesRef.current.filter((e) => e.source === nodeId);
 
-      // Auto-reconnect: if A→B→C, connect A→C
       const reconnectEdges: Edge[] = [];
       if (incomingEdges.length > 0 && outgoingEdges.length > 0) {
         for (const inc of incomingEdges) {
           for (const out of outgoingEdges) {
-            // Don't create duplicate edges
             const exists = edgesRef.current.some(
               (e) => e.source === inc.source && e.target === out.target
             );
@@ -259,17 +388,14 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
         }
       }
 
-      // Remove node and its edges, add reconnect edges
       setNodes((nds) => nds.filter((n) => n.id !== nodeId));
       setEdges((eds) => [
         ...eds.filter((e) => e.source !== nodeId && e.target !== nodeId),
         ...reconnectEdges,
       ]);
 
-      // Clear selection if deleted node was selected
       setSelectedNode((prev) => (prev?.id === nodeId ? null : prev));
 
-      // Update entry/exit if they referenced the deleted node
       if (entryRef.current === nodeId) setEntryPoint("");
       if (exitRef.current === nodeId) setExitPoint("");
 
@@ -282,7 +408,6 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
     [setNodes, setEdges]
   );
 
-  /** Prompt confirmation then delete */
   const confirmDeleteNode = useCallback((node: Node) => {
     setNodeToDelete(node);
     setDeleteDialogOpen(true);
@@ -296,16 +421,15 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
     setNodeToDelete(null);
   }, [nodeToDelete, deleteNodeById]);
 
-  /** Delete an edge by id (instant, no confirmation) */
   const deleteEdgeById = useCallback(
     (edgeId: string) => {
       setEdges((eds) => eds.filter((e) => e.id !== edgeId));
+      setSelectedEdge((prev) => (prev?.id === edgeId ? null : prev));
       toast.success("Edge deleted.");
     },
     [setEdges]
   );
 
-  /** Disconnect all edges from a node */
   const disconnectNode = useCallback(
     (nodeId: string) => {
       setEdges((eds) =>
@@ -316,7 +440,6 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
     [setEdges]
   );
 
-  /** Duplicate a node */
   const duplicateNode = useCallback(
     (node: Node) => {
       const config = NODE_TYPE_MAP[node.type || "step"];
@@ -336,28 +459,42 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
     [setNodes]
   );
 
+  // ─── Edge data update (for EdgeInspector) ───
+  const handleEdgeUpdate = useCallback(
+    (edgeId: string, data: Partial<LoopbackEdgeData>) => {
+      setEdges((eds) =>
+        eds.map((e) =>
+          e.id === edgeId
+            ? { ...e, data: { ...(e.data || {}), ...data } }
+            : e
+        )
+      );
+      // Keep selectedEdge in sync
+      setSelectedEdge((prev) =>
+        prev && prev.id === edgeId
+          ? { ...prev, data: { ...(prev.data || {}), ...data } }
+          : prev
+      );
+    },
+    [setEdges]
+  );
+
   // ─── Keyboard shortcut: Delete/Backspace ───
-  // We disable React Flow's built-in deleteKeyCode and handle it ourselves
-  // to show confirmation for nodes
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
       if (event.key !== "Delete" && event.key !== "Backspace") return;
 
-      // Don't intercept if user is typing in an input
       const tag = (event.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
-      // Check for selected nodes
       const selectedNodes = nodesRef.current.filter((n) => n.selected);
       const selectedEdges = edgesRef.current.filter((e) => e.selected);
 
       if (selectedNodes.length > 0) {
         event.preventDefault();
-        // Confirm for first selected node
         confirmDeleteNode(selectedNodes[0]);
       } else if (selectedEdges.length > 0) {
         event.preventDefault();
-        // Instant delete for edges
         for (const edge of selectedEdges) {
           deleteEdgeById(edge.id);
         }
@@ -495,6 +632,9 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
   const contextNode = contextMenu?.type === "node"
     ? nodes.find((n) => n.id === contextMenu.id) || null
     : null;
+  const contextEdge = contextMenu?.type === "edge"
+    ? edges.find((e) => e.id === contextMenu.id) || null
+    : null;
 
   return (
     <div className="flex h-[calc(100vh-4rem)] flex-col">
@@ -607,6 +747,7 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onNodeClick={onNodeClick}
+            onEdgeClick={onEdgeClick}
             onPaneClick={onPaneClick}
             onNodeContextMenu={onNodeContextMenu}
             onEdgeContextMenu={onEdgeContextMenu}
@@ -637,14 +778,24 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
           </ReactFlow>
         </div>
 
-        {selectedNode && (
+        {/* Right panel: Node Inspector or Edge Inspector */}
+        {selectedEdge && selectedEdge.type === "loopback" ? (
+          <EdgeInspector
+            edge={selectedEdge}
+            nodes={nodes}
+            onUpdateEdge={handleEdgeUpdate}
+            onDeleteEdge={deleteEdgeById}
+            onClose={() => setSelectedEdge(null)}
+          />
+        ) : selectedNode ? (
           <NodeInspector
             node={selectedNode}
+            edges={edges}
             onUpdate={handleNodeUpdate}
             onClose={() => setSelectedNode(null)}
             onDeleteNode={confirmDeleteNode}
           />
-        )}
+        ) : null}
       </div>
 
       {/* Delete Node Confirmation Dialog */}
@@ -678,7 +829,7 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Right-click Context Menu (rendered as a fixed overlay) */}
+      {/* Right-click Context Menu */}
       {contextMenu && (
         <div
           className="fixed inset-0 z-50"
@@ -735,15 +886,29 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
                 >
                   <span className="text-red-600">Delete Edge</span>
                 </button>
-                <button
-                  className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100"
-                  onClick={() => {
-                    toast.info("Edge conditions can be configured via Decision nodes.");
-                    setContextMenu(null);
-                  }}
-                >
-                  Add Condition
-                </button>
+                {contextEdge?.type !== "loopback" && (
+                  <button
+                    className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100"
+                    onClick={() => {
+                      toast.info("Edge conditions can be configured via Decision nodes.");
+                      setContextMenu(null);
+                    }}
+                  >
+                    Add Condition
+                  </button>
+                )}
+                {contextEdge?.type === "loopback" && (
+                  <button
+                    className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs hover:bg-slate-100"
+                    onClick={() => {
+                      setSelectedEdge(contextEdge);
+                      setSelectedNode(null);
+                      setContextMenu(null);
+                    }}
+                  >
+                    Edit Loop Settings
+                  </button>
+                )}
               </>
             )}
           </div>
