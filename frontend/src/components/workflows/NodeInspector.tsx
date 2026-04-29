@@ -17,6 +17,8 @@ import {
 } from "@/components/ui/select";
 import { NODE_TYPE_MAP } from "./nodeTypes";
 import { useToolStore } from "@/stores/tool-store";
+import ModelSelect from "@/components/shared/ModelSelect";
+import { useAvailableModels } from "@/hooks/useAvailableModels";
 import type { Node } from "@xyflow/react";
 import type { WorkflowNodeData } from "./CustomNodes/WorkflowNode";
 
@@ -32,6 +34,7 @@ export default function NodeInspector({
   onClose,
 }: NodeInspectorProps) {
   const { tools, fetchTools } = useToolStore();
+  const { providers } = useAvailableModels();
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -202,21 +205,14 @@ export default function NodeInspector({
         {/* Model Override */}
         <div className="space-y-1.5">
           <Label className="text-xs">Model Override (optional)</Label>
-          <Select
-            value={(data.modelOverride as string) || "none"}
-            onValueChange={(v) => update("modelOverride", v === "none" ? "" : v)}
-          >
-            <SelectTrigger className="h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">Use Configuration Default</SelectItem>
-              <SelectItem value="gpt-4o">GPT-4o</SelectItem>
-              <SelectItem value="gpt-4o-mini">GPT-4o Mini</SelectItem>
-              <SelectItem value="claude-sonnet-4-20250514">Claude Sonnet</SelectItem>
-              <SelectItem value="claude-haiku-4-5-20251001">Claude Haiku</SelectItem>
-            </SelectContent>
-          </Select>
+          <ModelSelect
+            value={(data.modelOverride as string) || ""}
+            onValueChange={(v) => update("modelOverride", v)}
+            providers={providers}
+            allowNone
+            noneLabel="Use Configuration Default"
+            className="h-8 text-xs"
+          />
         </div>
 
         {/* Guardrail Override */}

@@ -285,3 +285,70 @@ async def _test_financial(client: httpx.AsyncClient, provider: str, api_key: str
             return ApiKeyTestResult(success=True, message="Connected to Polygon.io")
         return ApiKeyTestResult(success=False, message=f"Polygon returned {r.status_code}")
     return ApiKeyTestResult(success=False, message=f"Unknown financial provider: {provider}")
+
+
+# ---------------------------------------------------------------------------
+# Available models (grouped by provider)
+# ---------------------------------------------------------------------------
+
+# Static model lists per provider
+PROVIDER_MODELS: dict[str, list[str]] = {
+    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o1", "o1-mini"],
+    "anthropic": ["claude-opus-4", "claude-sonnet-4", "claude-haiku-3.5"],
+    "groq": ["llama-3.3-70b", "llama-3.1-8b", "mixtral-8x7b", "gemma2-9b"],
+    "google_ai": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
+    "custom_openai": [],  # dynamic
+}
+
+PROVIDER_DISPLAY: dict[str, str] = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "groq": "Groq",
+    "google_ai": "Google AI (Gemini)",
+    "ollama": "Ollama (Local)",
+    "custom_openai": "Custom OpenAI-Compatible",
+}
+
+
+async def get_available_models(user_id: UUID) -> list[dict]:
+    resp = (
+        supabase.table("api_keys")
+        .select("provider, extra_fields, is_valid, encrypted_key")
+        .eq("user_id", str(user_id))
+        .execute()
+    )
+    configured = {row["provider"]: row for row in resp.data}
+
+    result = []
+    for provider, display_name in PROVIDER_DISPLAY.items():
+        row = configured.get(provider)
+        connected = row is not None
+        models = list(PROVIDER_MODELS.get(provider, []))
+
+        # For Ollama, try to fetch real models
+        if provider == "ollama" and connected:
+            extra = row.get("extra_fields", {}) or {}
+            base_url = extra.get("base_url", "http://localhost:11434").rstrip("/")
+            try:
+                async with httpx.AsyncClient(timeout=5) as client:
+                    r = await client.get(f"{base_url}/api/tags")
+                    if r.status_code == 200:
+                        models = [m["name"] for m in r.json().get("models", [])]
+            except Exception:
+                models = ["(could not reach Ollama)"]
+
+        # For custom_openai, show the model_name from extra_fields
+        if provider == "custom_openai" and connected:
+            extra = row.get("extra_fields", {}) or {}
+            model_name = extra.get("model_name", "")
+            if model_name:
+                models = [model_name]
+
+        result.append({
+            "provider": provider,
+            "display_name": display_name,
+            "connected": connected,
+            "models": models,
+        })
+
+    return result

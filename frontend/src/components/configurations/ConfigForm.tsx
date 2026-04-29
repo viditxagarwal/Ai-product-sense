@@ -16,11 +16,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import Breadcrumbs from "@/components/layout/Breadcrumbs";
+import ModelSelect from "@/components/shared/ModelSelect";
 import ConfigSection from "./ConfigSection";
 import GuardrailReorder from "./GuardrailReorder";
-import { CONFIG_DEFAULTS, MODEL_OPTIONS } from "./configDefaults";
+import { CONFIG_DEFAULTS } from "./configDefaults";
 import { useConfigStore } from "@/stores/config-store";
 import { usePromptStore } from "@/stores/prompt-store";
+import { useAvailableModels } from "@/hooks/useAvailableModels";
 import { apiGet } from "@/lib/api";
 import type { ConfigurationResponse } from "@/types";
 
@@ -226,6 +228,7 @@ export default function ConfigForm() {
   const searchParams = useSearchParams();
   const { createConfig } = useConfigStore();
   const { prompts, fetchPrompts } = usePromptStore();
+  const { providers } = useAvailableModels();
 
   const [form, setForm] = useState<FormData>({ ...CONFIG_DEFAULTS });
   const [creating, setCreating] = useState(false);
@@ -353,8 +356,23 @@ export default function ConfigForm() {
       {/* Section 2: Model Settings */}
       <ConfigSection title="Model Settings" description="Primary model, fallback, temperature, and token limits">
         <div className="grid gap-4 sm:grid-cols-2">
-          <SelectField label="Primary Model" fieldKey="primary_model" form={form} onChange={update} options={MODEL_OPTIONS} />
-          <SelectField label="Fallback Model" fieldKey="fallback_model" form={form} onChange={update} options={[{ value: "none", label: "None" }, ...MODEL_OPTIONS]} />
+          <Field label="Primary Model" fieldKey="primary_model" form={form} onChange={update}>
+            <ModelSelect
+              value={String(form.primary_model ?? "")}
+              onValueChange={(v) => update("primary_model", v)}
+              providers={providers}
+              showTooltip
+            />
+          </Field>
+          <Field label="Fallback Model" fieldKey="fallback_model" form={form} onChange={update}>
+            <ModelSelect
+              value={String(form.fallback_model ?? "")}
+              onValueChange={(v) => update("fallback_model", v)}
+              providers={providers}
+              allowNone
+              noneLabel="None"
+            />
+          </Field>
           <SelectField label="Model Selection Strategy" fieldKey="model_selection_strategy" form={form} onChange={update} options={opts(["fixed", "cost_optimized", "quality_optimized", "adaptive"])} />
           <NumberField label="Max Output Tokens" fieldKey="max_output_tokens" form={form} onChange={update} min={256} max={32768} step={256} />
         </div>
