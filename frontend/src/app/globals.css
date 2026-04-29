@@ -56,3 +56,24 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* React Flow: glow effect on valid connection target */
+.react-flow__node.connecting {
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4);
+  border-radius: 8px;
+}
+.react-flow__handle.connectingto {
+  box-shadow: 0 0 8px 2px rgba(59, 130, 246, 0.6);
+}
+/* Smooth connection line animation */
+.react-flow__connection-path {
+  stroke: #3b82f6 !important;
+  stroke-width: 2 !important;
+  stroke-dasharray: 5 5;
+  animation: dash-flow 0.5s linear infinite;
+}
+@keyframes dash-flow {
+  to {
+    stroke-dashoffset: -10;
+  }
+}
