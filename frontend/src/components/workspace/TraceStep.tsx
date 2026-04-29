@@ -35,6 +35,10 @@ const NODE_COLORS: Record<string, { bg: string; text: string; border: string }> 
   loop:             { bg: "bg-violet-50",  text: "text-violet-600",  border: "border-violet-200" },
   human_review:     { bg: "bg-teal-50",    text: "text-teal-600",    border: "border-teal-200" },
   end:              { bg: "bg-gray-50",    text: "text-gray-500",    border: "border-gray-200" },
+  step:             { bg: "bg-blue-50",    text: "text-blue-600",    border: "border-blue-200" },
+  decision:         { bg: "bg-orange-50",  text: "text-orange-600",  border: "border-orange-200" },
+  parallel:         { bg: "bg-cyan-50",    text: "text-cyan-600",    border: "border-cyan-200" },
+  direct_llm:       { bg: "bg-violet-50",  text: "text-violet-600",  border: "border-violet-200" },
 };
 
 const DEFAULT_COLOR = { bg: "bg-slate-50", text: "text-slate-600", border: "border-slate-200" };
@@ -111,8 +115,11 @@ export default function TraceStep({ step }: TraceStepProps) {
         </span>
 
         {/* Result summary */}
-        {resultSummary && step.status === "completed" && (
-          <span className="hidden truncate text-[10px] text-slate-400 sm:inline">
+        {resultSummary && (step.status === "completed" || step.status === "failed") && (
+          <span className={cn(
+            "hidden truncate text-[10px] sm:inline",
+            resultSummary.startsWith("Error:") ? "font-medium text-red-500" : "text-slate-400"
+          )}>
             → {resultSummary}
           </span>
         )}

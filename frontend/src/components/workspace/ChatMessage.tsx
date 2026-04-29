@@ -21,11 +21,21 @@ const FILE_TYPE_ICONS: Record<string, typeof FileText> = {
 export default function ChatMessage({ message }: ChatMessageProps) {
   const { setSelectedFileId, setActiveRightTab } = useWorkspaceStore();
 
-  // System messages
+  // System messages (with severity support)
   if (message.role === "system") {
+    const severity = (message.metadata as Record<string, unknown>)?.severity as string | undefined;
     return (
       <div className="flex justify-center px-4 py-2">
-        <span className="text-xs text-slate-400">{message.content}</span>
+        <span className={cn(
+          "rounded-md px-3 py-1.5 text-xs",
+          severity === "error"
+            ? "bg-red-50 text-red-700 border border-red-200"
+            : severity === "warning"
+            ? "bg-amber-50 text-amber-700 border border-amber-200"
+            : "text-slate-400"
+        )}>
+          {message.content}
+        </span>
       </div>
     );
   }
@@ -80,6 +90,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
   }
 
   const isUser = message.role === "user";
+  const isError = !!(message.metadata as Record<string, unknown>)?.is_error;
 
   return (
     <div className={cn("flex px-4 py-2", isUser ? "justify-end" : "justify-start")}>
@@ -88,6 +99,8 @@ export default function ChatMessage({ message }: ChatMessageProps) {
           "max-w-[80%] rounded-lg px-3 py-2",
           isUser
             ? "bg-blue-600 text-white"
+            : isError
+            ? "border border-red-300 bg-red-50 text-red-800"
             : "border border-slate-200 bg-white text-slate-800"
         )}
       >

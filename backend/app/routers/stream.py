@@ -6,7 +6,7 @@ import traceback
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.database import supabase
-from app.services.execution_simulator import simulate_execution
+from app.services.workflow_executor import execute_workflow
 
 logger = logging.getLogger("ws.stream")
 
@@ -137,7 +137,7 @@ async def thread_stream(websocket: WebSocket, thread_id: str):
                     existing.cancel()
 
                 task = asyncio.create_task(
-                    simulate_execution(thread_id, user_message, send_event)
+                    execute_workflow(thread_id, user_message, send_event)
                 )
                 _active_runs[thread_id] = task
 

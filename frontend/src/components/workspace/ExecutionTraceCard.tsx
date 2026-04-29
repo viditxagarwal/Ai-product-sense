@@ -65,7 +65,9 @@ export default function ExecutionTraceCard() {
 
         {/* Failed error */}
         {isFailed && runError && (
-          <span className="truncate text-[10px] text-red-500">{runError}</span>
+          <span className="truncate text-[10px] font-medium text-red-500">
+            Error: {runError}
+          </span>
         )}
 
         <div className="flex-1" />

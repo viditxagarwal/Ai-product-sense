@@ -341,13 +341,14 @@ export default function ChatInput() {
       }
 
       case "run_failed": {
+        const failError = (data.error as string) || "Execution failed";
         setActiveRun({
           id: (data.run_id as string) || "",
           status: "failed",
         });
-        setRunError((data.error as string) || "Execution failed");
-        setStreaming(false);
-        wsRef.current?.close();
+        setRunError(failError);
+        // Don't close WS yet — executor may send fallback events after this
+        // WS will close naturally when the server is done
         break;
       }
 
@@ -369,9 +370,63 @@ export default function ChatInput() {
         break;
       }
 
+      // ── Execution error (visible in chat) ─────────────
+      case "execution_error": {
+        const errorMsg = (data.error as string) || "Unknown execution error";
+        setRunError(errorMsg);
+        // Add error as a visible chat message
+        if (activeThreadId) {
+          const errorChatMsg: ThreadMessage = {
+            id: `error-${Date.now()}`,
+            thread_id: activeThreadId,
+            role: "assistant",
+            content: `**Execution failed:** ${errorMsg}`,
+            message_type: "text",
+            metadata: { is_error: true },
+            created_at: new Date().toISOString(),
+          };
+          addLocalMessage(errorChatMsg);
+        }
+        setStreaming(false);
+        break;
+      }
+
+      // ── System message (warning/info banners) ─────────
+      case "system_message": {
+        if (activeThreadId) {
+          const severity = (data.severity as string) || "info";
+          const content = data.content as string;
+          const sysMsg: ThreadMessage = {
+            id: `sys-${Date.now()}`,
+            thread_id: activeThreadId,
+            role: "system",
+            content: severity === "error" ? `Error: ${content}` : content,
+            message_type: "text",
+            metadata: { severity },
+            created_at: new Date().toISOString(),
+          };
+          addLocalMessage(sysMsg);
+        }
+        break;
+      }
+
       // ── Error ────────────────────────────────────────
       case "error": {
-        setRunError((data.message as string) || "Unknown error");
+        const errorMsg = (data.message as string) || "Unknown error";
+        setRunError(errorMsg);
+        // Also show in chat so user sees it
+        if (activeThreadId) {
+          const errorChatMsg: ThreadMessage = {
+            id: `ws-error-${Date.now()}`,
+            thread_id: activeThreadId,
+            role: "assistant",
+            content: `**Connection error:** ${errorMsg}`,
+            message_type: "text",
+            metadata: { is_error: true },
+            created_at: new Date().toISOString(),
+          };
+          addLocalMessage(errorChatMsg);
+        }
         break;
       }
     }
