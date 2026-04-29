@@ -46,7 +46,7 @@ class ConfigurationCreate(BaseModel):
     embedding_model: str = 'text-embedding-3-large'
     retrieval_strategy: Literal['vector_similarity', 'keyword_bm25', 'hybrid_rrf', 'multi_query', 'contextual_compression', 'parent_document', 'self_query'] = 'hybrid_rrf'
     top_k_results: int = 5
-    reranking: Literal['none', 'cncoder', 'llm_rerank', 'cohere_rerank'] = 'cross_encoder'
+    reranking: Literal['none', 'cross_encoder', 'llm_rerank', 'cohere_rerank'] = 'cross_encoder'
     rerank_top_n: int = 3
     kb_freshness_preference: Literal['prefer_recent', 'prefer_authoritative', 'no_preference'] = 'no_preference'
 
