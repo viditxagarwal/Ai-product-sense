@@ -157,10 +157,12 @@ export default function WorkflowCanvas({ workflowId }: WorkflowCanvasProps) {
 
   const nodeTypes: NodeTypes = useMemo(
     () => ({
+      // Current types
       step: WorkflowNode,
       decision: WorkflowNode,
       parallel: WorkflowNode,
       human_review: WorkflowNode,
+      // Legacy types (for backward compatibility with saved workflows)
       retriever: WorkflowNode,
       agent_node: WorkflowNode,
       route: WorkflowNode,

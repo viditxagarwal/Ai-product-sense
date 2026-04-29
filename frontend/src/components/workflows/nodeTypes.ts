@@ -4,12 +4,12 @@ import {
   GitBranch,
   Layers,
   UserCheck,
-  Search,
 } from "lucide-react";
 
 export interface NodeTypeConfig {
   type: string;
   label: string;
+  description: string;  // one-line description shown in toolbar
   icon: LucideIcon;
   color: string;       // tailwind bg class for the node header
   borderColor: string;  // tailwind border class
@@ -21,15 +21,17 @@ export const NODE_TYPE_CONFIGS: NodeTypeConfig[] = [
   {
     type: "step",
     label: "Step",
+    description: "A processing unit that does work",
     icon: Box,
     color: "bg-blue-500",
     borderColor: "border-blue-300",
     textColor: "text-blue-700",
-    tooltip: "A processing unit that calls an LLM. Bind tools, set system prompts, configure model overrides.",
+    tooltip: "A single processing node. Bind tools, set system prompts, configure model overrides.",
   },
   {
     type: "decision",
     label: "Decision",
+    description: "Routes output to different paths",
     icon: GitBranch,
     color: "bg-orange-500",
     borderColor: "border-orange-300",
@@ -39,6 +41,7 @@ export const NODE_TYPE_CONFIGS: NodeTypeConfig[] = [
   {
     type: "parallel",
     label: "Parallel",
+    description: "Splits into N branches, merges back",
     icon: Layers,
     color: "bg-purple-500",
     borderColor: "border-purple-300",
@@ -48,20 +51,12 @@ export const NODE_TYPE_CONFIGS: NodeTypeConfig[] = [
   {
     type: "human_review",
     label: "Human Review",
+    description: "Pauses for human input or approval",
     icon: UserCheck,
     color: "bg-amber-500",
     borderColor: "border-amber-300",
     textColor: "text-amber-700",
     tooltip: "Pauses execution for human input or approval. Configure what's shown and timeout behavior.",
-  },
-  {
-    type: "retriever",
-    label: "Retriever",
-    icon: Search,
-    color: "bg-green-500",
-    borderColor: "border-green-300",
-    textColor: "text-green-700",
-    tooltip: "Searches the knowledge base for relevant context. Non-LLM step with its own retrieval settings.",
   },
 ];
 
@@ -80,6 +75,7 @@ const LEGACY_MAP: Record<string, string> = {
   loop: "step",
   plan_and_execute: "step",
   validator: "step",
+  retriever: "step",
 };
 
 /** Resolve a node type, mapping legacy types to new ones */

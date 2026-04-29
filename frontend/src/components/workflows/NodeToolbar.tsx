@@ -60,14 +60,19 @@ export default function NodeToolbar({ onAddNode, onAddTemplate }: NodeToolbarPro
                     draggable
                     onDragStart={(e) => onDragStart(e, config.type)}
                     onClick={() => onAddNode(config.type)}
-                    className={`flex cursor-grab items-center gap-2.5 rounded-md border border-slate-200 px-3 py-2 text-xs font-medium transition-colors hover:bg-slate-50 active:cursor-grabbing ${config.textColor}`}
+                    className={`flex cursor-grab items-center gap-2.5 rounded-md border border-slate-200 px-3 py-2.5 text-xs font-medium transition-colors hover:bg-slate-50 active:cursor-grabbing ${config.textColor}`}
                   >
                     <div
-                      className={`flex size-6 items-center justify-center rounded ${config.color}`}
+                      className={`flex size-7 shrink-0 items-center justify-center rounded ${config.color}`}
                     >
                       <Icon className="size-3.5 text-white" />
                     </div>
-                    <span className="text-slate-700">{config.label}</span>
+                    <div className="min-w-0">
+                      <span className="text-slate-700">{config.label}</span>
+                      <p className="truncate text-[10px] font-normal text-slate-400">
+                        {config.description}
+                      </p>
+                    </div>
                   </div>
                 </TooltipTrigger>
                 <TooltipContent side="right" className="max-w-[220px] text-xs">
