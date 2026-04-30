@@ -19,6 +19,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { ExecutionEvent, LLMCallData } from "@/types";
 import ToolCallCard from "./ToolCallCard";
+import RawMessagesViewer from "./RawMessagesViewer";
 
 interface Props {
   llmEvents: ExecutionEvent[];
@@ -79,7 +80,7 @@ function LLMCallCard({
   showRawMessages: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const hasThinking = showThinking && data.thinking_text;
+  const hasThinking = showThinking && data.thinking_text && data.thinking_text.length > 0;
   const hasWarning = data.stop_reason === "max_tokens" || data.stop_reason === "content_filter";
 
   return (
@@ -164,8 +165,13 @@ function LLMCallCard({
             <ThinkingBlock text={data.thinking_text} tokens={data.thinking_tokens} />
           )}
 
+          {/* Raw Messages Viewer (C9) */}
+          {showRawMessages && data.input_messages && (
+            <RawMessagesViewer messages={data.input_messages as Array<{ role: string; content: string }>} />
+          )}
+
           {/* Tool call requests */}
-          {data.tool_calls_requested.length > 0 && (
+          {data.tool_calls_requested && data.tool_calls_requested.length > 0 && (
             <div>
               <span className="text-[9px] font-medium text-blue-500">
                 Requested {data.tool_calls_requested.length} tool call(s)

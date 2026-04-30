@@ -4,18 +4,7 @@ import { useEffect, useState } from "react";
 import { ArrowUp, ArrowDown, Minus, X, GitCompare, Loader2 } from "lucide-react";
 import { apiGet } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { ExecutionSummary } from "@/types/index";
-
-interface ExecutionStep {
-  id: string;
-  node_id: string;
-  node_name?: string;
-  status: string;
-  duration_ms?: number;
-  input_tokens?: number;
-  output_tokens?: number;
-  cost_usd?: number;
-}
+import type { ExecutionSummary } from "@/types";
 
 interface ComparisonViewProps {
   runIdA: string;

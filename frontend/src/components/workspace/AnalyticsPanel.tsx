@@ -3,62 +3,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-export interface ExecutionSummary {
-  execution_id: string;
-  status: string;
-  total_duration_ms: number;
-  total_tokens: number;
-  total_input_tokens: number;
-  total_output_tokens: number;
-  total_thinking_tokens: number;
-  total_cache_read_tokens: number;
-  total_cache_write_tokens: number;
-  total_cost_usd: number;
-  total_llm_calls: number;
-  total_tool_calls: number;
-  step_count: number;
-  path_taken: string[];
-  models_used: string[];
-  tools_used: string[];
-  cost_by_model: Record<string, number>;
-  cost_by_node: Record<string, number>;
-}
-
-export interface ExecutionEvent {
-  id: string;
-  execution_id: string;
-  parent_event_id: string | null;
-  event_type: string;
-  timestamp: string;
-  data: Record<string, unknown>;
-}
-
-export interface ExecutionStep {
-  id: string;
-  run_id: string;
-  step_number: number;
-  node_type: string;
-  node_name: string;
-  status: string;
-  duration_ms: number | null;
-  tokens_used: number;
-  cost_usd: number;
-}
-
-export interface LLMCallData {
-  model_id: string;
-  provider: string;
-  input_tokens: number;
-  output_tokens: number;
-  thinking_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
-  cost_usd: number;
-  latency_ms: number;
-}
+import type { ExecutionSummary, ExecutionEvent, ExecutionStep, LLMCallData } from "@/types";
 
 // ─── Color Palettes ───────────────────────────────────────────────────────────
 

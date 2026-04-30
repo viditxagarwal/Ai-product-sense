@@ -90,10 +90,16 @@ export default function ToolCallCard({ event }: Props) {
                 Output ({d.output_type}, {formatBytes(d.output_size_bytes)})
               </h6>
               <pre className="max-h-32 overflow-auto rounded bg-slate-50 p-1.5 text-[9px] text-slate-600">
-                {typeof d.output_result === "string"
-                  ? d.output_result.slice(0, 500)
-                  : JSON.stringify(d.output_result, null, 2).slice(0, 500)}
-                {(typeof d.output_result === "string" ? d.output_result.length : JSON.stringify(d.output_result).length) > 500 && "..."}
+                {(() => {
+                  try {
+                    const text = typeof d.output_result === "string"
+                      ? d.output_result
+                      : JSON.stringify(d.output_result, null, 2);
+                    return text.length > 500 ? text.slice(0, 500) + "..." : text;
+                  } catch {
+                    return String(d.output_result);
+                  }
+                })()}
               </pre>
             </div>
           )}

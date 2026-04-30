@@ -564,6 +564,7 @@ export interface ExecutionEvent {
 export interface LLMCallData {
   model_id: string;
   provider: string;
+  input_messages: { role: string; content: string }[];
   input_tokens: number;
   output_tokens: number;
   thinking_tokens: number;
