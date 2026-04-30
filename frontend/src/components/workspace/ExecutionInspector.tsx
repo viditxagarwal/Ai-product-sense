@@ -6,7 +6,7 @@
  * timing bar, LLM call timeline, tool call cards, and thinking blocks.
  */
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Search,
   Loader2,
@@ -15,12 +15,19 @@ import {
   DollarSign,
   Shield,
   Layers,
+  Settings,
+  GitBranch,
+  BarChart3,
+  List,
 } from "lucide-react";
 import { useExecutionStore } from "@/stores/execution-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import ExecutionSummaryBar from "./ExecutionSummaryBar";
 import TimingBar from "./TimingBar";
 import InspectorNode from "./InspectorNode";
+import SpanTree from "./SpanTree";
+import AnalyticsPanel from "./AnalyticsPanel";
+import { DisplaySettingsPanel } from "./DisplaySettingsPanel";
 
 export default function ExecutionInspector() {
   const { selectedRunId, selectedStepId } = useWorkspaceStore();
@@ -40,6 +47,8 @@ export default function ExecutionInspector() {
   } = useExecutionStore();
 
   const nodeRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [viewMode, setViewMode] = useState<"timeline" | "tree" | "analytics">("timeline");
+  const [showSettings, setShowSettings] = useState(false);
 
   // Fetch run, steps, events, and summary when selectedRunId changes
   useEffect(() => {
@@ -142,13 +151,49 @@ export default function ExecutionInspector() {
       {/* C.1: Enhanced Summary Bar */}
       <ExecutionSummaryBar summary={summary} status={inspectorRun.status} />
 
-      {/* B2: Timing Bar */}
-      <div className="border-b">
-        <TimingBar steps={inspectorSteps} onSegmentClick={scrollToNode} />
+      {/* View mode toggle + settings */}
+      <div className="flex items-center gap-1 border-b px-3 py-1">
+        {([
+          { key: "timeline" as const, icon: List, label: "Timeline" },
+          { key: "tree" as const, icon: GitBranch, label: "Span Tree" },
+          { key: "analytics" as const, icon: BarChart3, label: "Analytics" },
+        ]).map(({ key, icon: Icon, label }) => (
+          <button
+            key={key}
+            onClick={() => setViewMode(key)}
+            className={`flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition-colors ${
+              viewMode === key ? "bg-slate-100 text-slate-700" : "text-slate-400 hover:text-slate-600"
+            }`}
+          >
+            <Icon className="size-3" />
+            {label}
+          </button>
+        ))}
+        <div className="flex-1" />
+        <button
+          onClick={() => setShowSettings(!showSettings)}
+          className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+        >
+          <Settings className="size-3.5" />
+        </button>
       </div>
 
+      {/* Display Settings Panel (overlay) */}
+      {showSettings && (
+        <div className="border-b">
+          <DisplaySettingsPanel />
+        </div>
+      )}
+
+      {/* B2: Timing Bar */}
+      {viewMode === "timeline" && (
+        <div className="border-b">
+          <TimingBar steps={inspectorSteps} onSegmentClick={scrollToNode} />
+        </div>
+      )}
+
       {/* B1: Step Pills */}
-      {inspectorSteps.length > 1 && (
+      {viewMode === "timeline" && inspectorSteps.length > 1 && (
         <div className="flex items-center gap-1 overflow-x-auto border-b px-3 py-1.5">
           {inspectorSteps.map((step, i) => {
             const isActive = step.id === selectedStepId;
@@ -177,26 +222,45 @@ export default function ExecutionInspector() {
         </div>
       )}
 
-      {/* Node Timeline with events */}
+      {/* Main content area */}
       <div className="flex-1 overflow-y-auto">
-        {inspectorSteps.map((step) => (
-          <InspectorNode
-            key={step.id}
-            ref={(el) => {
-              nodeRefs.current[step.id] = el;
-            }}
-            step={step}
-            isSelected={step.id === selectedStepId}
-            events={eventsByNode[step.id] || inspectorEvents.filter(
-              e => (e.data as Record<string, unknown>).step_id === step.id
+        {/* Timeline view (default) */}
+        {viewMode === "timeline" && (
+          <>
+            {inspectorSteps.map((step) => (
+              <InspectorNode
+                key={step.id}
+                ref={(el) => {
+                  nodeRefs.current[step.id] = el;
+                }}
+                step={step}
+                isSelected={step.id === selectedStepId}
+                events={eventsByNode[step.id] || inspectorEvents.filter(
+                  e => (e.data as Record<string, unknown>).step_id === step.id
+                )}
+                displaySettings={displaySettings}
+              />
+            ))}
+            {inspectorSteps.length === 0 && (
+              <div className="flex items-center justify-center p-6">
+                <p className="text-xs text-slate-400">No execution steps found</p>
+              </div>
             )}
-            displaySettings={displaySettings}
+          </>
+        )}
+
+        {/* Span Tree view */}
+        {viewMode === "tree" && (
+          <SpanTree events={inspectorEvents} summary={summary} />
+        )}
+
+        {/* Analytics view */}
+        {viewMode === "analytics" && (
+          <AnalyticsPanel
+            summary={summary}
+            steps={inspectorSteps}
+            events={inspectorEvents}
           />
-        ))}
-        {inspectorSteps.length === 0 && (
-          <div className="flex items-center justify-center p-6">
-            <p className="text-xs text-slate-400">No execution steps found</p>
-          </div>
         )}
       </div>
     </div>

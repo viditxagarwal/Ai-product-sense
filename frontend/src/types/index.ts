@@ -61,8 +61,8 @@ export type WorkflowComponentType = 'node' | 'gate' | 'split' | 'start' | 'end';
 // Edge types
 export type WorkflowEdgeType = 'flow' | 'conditional' | 'loop';
 
-// Condition evaluation methods
-export type ConditionMethod = 'rule_based' | 'llm_evaluation' | 'score_comparison' | 'regex_match' | 'always';
+// Condition evaluation methods (5-level routing)
+export type ConditionMethod = 'field_comparison' | 'pattern_match' | 'multi_condition' | 'llm_evaluation' | 'webhook_function' | 'always';
 
 // The universal Node's data
 export interface WorkflowNodeData {
@@ -150,12 +150,44 @@ export interface WorkflowEdgeData {
 
   // === Conditional edge ===
   conditionMethod?: ConditionMethod;
-  ruleField?: string;
-  ruleOperator?: 'equals' | 'contains' | 'greater_than' | 'less_than' | 'is_empty' | 'is_not_empty';
-  ruleValue?: string;
+
+  // Level 1: field_comparison
+  conditionField?: string;
+  conditionOperator?: string; // equals, not_equals, greater_than, less_than, contains, not_contains, starts_with, ends_with, is_empty, is_not_empty, matches_regex, in_list, not_in_list, greater_than_or_equal, less_than_or_equal
+  conditionValue?: string;
+
+  // Level 2: pattern_match
+  patternField?: string; // full_output or specific_field
+  patternOperator?: string; // contains, regex, starts_with, ends_with
+  patternValue?: string;
+
+  // Level 3: multi_condition
+  conditionRules?: Array<{ field: string; operator: string; value: string }>;
+  conditionCombinator?: 'AND' | 'OR';
+
+  // Level 4: llm_evaluation
   conditionPrompt?: string;
   evaluatorModel?: string;
   confidenceThreshold?: number;
+  evaluationResponseMapping?: Record<string, string>; // e.g. {"YES": "node_output", "NO": "node_retry"}
+
+  // Level 5: webhook_function
+  webhookUrl?: string;
+  webhookInputMapping?: Record<string, string>;
+  webhookResponseField?: string;
+
+  // Edge mapping (Section E.2)
+  inputOutputMapping?: Array<{
+    targetField: string;
+    sourceExpression: string;
+    transform: 'direct' | 'template' | 'lookup' | 'jsonpath' | 'type_cast' | 'expression';
+    transformConfig?: string;
+  }>;
+
+  // === Legacy fields (backward compat — no longer used in UI) ===
+  ruleField?: string;
+  ruleOperator?: 'equals' | 'contains' | 'greater_than' | 'less_than' | 'is_empty' | 'is_not_empty';
+  ruleValue?: string;
   scoreField?: string;
   scoreOperator?: '>' | '>=' | '<' | '<=' | '==';
   scoreThreshold?: number;

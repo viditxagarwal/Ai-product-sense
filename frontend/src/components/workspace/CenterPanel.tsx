@@ -10,6 +10,7 @@ import ConfigBar from "./ConfigBar";
 import InstructionsBar from "./InstructionsBar";
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
+import StreamingOverlay from "./StreamingOverlay";
 
 export default function CenterPanel() {
   const { isConfigGateOpen, activeThreadId, activeDomainId } = useWorkspaceStore();
@@ -110,6 +111,9 @@ export default function CenterPanel() {
           </div>
         )}
       </div>
+
+      {/* Streaming Overlay — progress bar, counters, checklist */}
+      <StreamingOverlay />
 
       {/* Chat Input — fixed at bottom */}
       <ChatInput />

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { ArrowRight, X, Trash2, RotateCcw } from "lucide-react";
+import { ArrowRight, X, Trash2, RotateCcw, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,6 +32,24 @@ const EDGE_TYPE_COLORS: Record<string, { bg: string; text: string; label: string
   loop: { bg: "bg-cyan-100", text: "text-cyan-700", label: "Loop" },
 };
 
+const FIELD_COMPARISON_OPERATORS = [
+  { value: "equals", label: "Equals" },
+  { value: "not_equals", label: "Not Equals" },
+  { value: "greater_than", label: "Greater Than" },
+  { value: "less_than", label: "Less Than" },
+  { value: "greater_than_or_equal", label: "≥ Greater Than or Equal" },
+  { value: "less_than_or_equal", label: "≤ Less Than or Equal" },
+  { value: "contains", label: "Contains" },
+  { value: "not_contains", label: "Not Contains" },
+  { value: "starts_with", label: "Starts With" },
+  { value: "ends_with", label: "Ends With" },
+  { value: "is_empty", label: "Is Empty" },
+  { value: "is_not_empty", label: "Is Not Empty" },
+  { value: "matches_regex", label: "Matches Regex" },
+  { value: "in_list", label: "In List" },
+  { value: "not_in_list", label: "Not In List" },
+];
+
 export default function EdgeInspector({
   edge,
   nodes,
@@ -39,7 +57,6 @@ export default function EdgeInspector({
   onDeleteEdge,
   onClose,
 }: EdgeInspectorProps) {
-  // Support both old LoopbackEdgeData and new WorkflowEdgeData
   const rawData = (edge.data || {}) as Record<string, unknown>;
   const edgeType = (rawData.edgeType as string) || (edge.type === "loopback" ? "loop" : "flow");
   const data = rawData as unknown as WorkflowEdgeData;
@@ -57,6 +74,70 @@ export default function EdgeInspector({
   const targetLabel = (targetNode?.data as WorkflowNodeData)?.label || edge.target;
 
   const typeConfig = EDGE_TYPE_COLORS[edgeType] || EDGE_TYPE_COLORS.flow;
+
+  // ── multi_condition helpers ──────────────────────────────────
+  const conditionRules = data.conditionRules || [];
+
+  const addRule = () => {
+    update("conditionRules", [...conditionRules, { field: "", operator: "equals", value: "" }]);
+  };
+
+  const removeRule = (idx: number) => {
+    update("conditionRules", conditionRules.filter((_, i) => i !== idx));
+  };
+
+  const updateRule = (idx: number, key: "field" | "operator" | "value", val: string) => {
+    const next = conditionRules.map((r, i) => (i === idx ? { ...r, [key]: val } : r));
+    update("conditionRules", next);
+  };
+
+  // ── evaluationResponseMapping helpers ───────────────────────
+  const evalMapping = data.evaluationResponseMapping || {};
+
+  const addEvalMappingRow = () => {
+    update("evaluationResponseMapping", { ...evalMapping, "": "" });
+  };
+
+  const updateEvalMappingKey = (oldKey: string, newKey: string) => {
+    const next: Record<string, string> = {};
+    for (const [k, v] of Object.entries(evalMapping)) {
+      next[k === oldKey ? newKey : k] = v as string;
+    }
+    update("evaluationResponseMapping", next);
+  };
+
+  const updateEvalMappingValue = (key: string, val: string) => {
+    update("evaluationResponseMapping", { ...evalMapping, [key]: val });
+  };
+
+  const removeEvalMappingRow = (key: string) => {
+    const next = { ...evalMapping };
+    delete next[key];
+    update("evaluationResponseMapping", next);
+  };
+
+  // ── inputOutputMapping helpers ───────────────────────────────
+  const ioMapping = data.inputOutputMapping || [];
+
+  const addIoRow = () => {
+    update("inputOutputMapping", [
+      ...ioMapping,
+      { targetField: "", sourceExpression: "", transform: "direct", transformConfig: "" },
+    ]);
+  };
+
+  const removeIoRow = (idx: number) => {
+    update("inputOutputMapping", ioMapping.filter((_, i) => i !== idx));
+  };
+
+  const updateIoRow = (
+    idx: number,
+    key: "targetField" | "sourceExpression" | "transform" | "transformConfig",
+    val: string
+  ) => {
+    const next = ioMapping.map((r, i) => (i === idx ? { ...r, [key]: val } : r));
+    update("inputOutputMapping", next);
+  };
 
   return (
     <div className="flex w-80 shrink-0 flex-col border-l border-slate-200 bg-white">
@@ -113,52 +194,180 @@ export default function EdgeInspector({
           <div className="space-y-4 rounded-md border border-amber-200 bg-amber-50/50 p-3">
             <Label className="text-xs font-semibold text-amber-700">Condition</Label>
 
+            {/* Routing level selector */}
             <div className="space-y-1.5">
-              <Label className="text-[11px] text-slate-500">Method</Label>
+              <Label className="text-[11px] text-slate-500">Routing Level</Label>
               <Select
-                value={data.conditionMethod || "llm_evaluation"}
+                value={data.conditionMethod || "field_comparison"}
                 onValueChange={(v) => update("conditionMethod", v)}
               >
                 <SelectTrigger className="h-8 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="rule_based">Rule-based</SelectItem>
-                  <SelectItem value="llm_evaluation">LLM Evaluation</SelectItem>
-                  <SelectItem value="score_comparison">Score Comparison</SelectItem>
-                  <SelectItem value="regex_match">Regex Match</SelectItem>
+                  <SelectItem value="field_comparison">Level 1: Field Comparison</SelectItem>
+                  <SelectItem value="pattern_match">Level 2: Pattern Match</SelectItem>
+                  <SelectItem value="multi_condition">Level 3: Multi-Condition</SelectItem>
+                  <SelectItem value="llm_evaluation">Level 4: LLM Evaluation</SelectItem>
+                  <SelectItem value="webhook_function">Level 5: Webhook Function</SelectItem>
                   <SelectItem value="always">Always (fallback)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
-            {data.conditionMethod === "rule_based" && (
+            {/* ── Level 1: Field Comparison ── */}
+            {data.conditionMethod === "field_comparison" && (
               <>
                 <div className="space-y-1.5">
                   <Label className="text-[11px] text-slate-500">Field</Label>
-                  <Input value={data.ruleField || ""} onChange={(e) => update("ruleField", e.target.value)} className="h-8 text-xs" placeholder="output.category" />
+                  <Input
+                    value={data.conditionField || ""}
+                    onChange={(e) => update("conditionField", e.target.value)}
+                    className="h-8 text-xs"
+                    placeholder="output.category"
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-[11px] text-slate-500">Operator</Label>
-                  <Select value={data.ruleOperator || "equals"} onValueChange={(v) => update("ruleOperator", v)}>
+                  <Select
+                    value={data.conditionOperator || "equals"}
+                    onValueChange={(v) => update("conditionOperator", v)}
+                  >
                     <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="equals">Equals</SelectItem>
-                      <SelectItem value="contains">Contains</SelectItem>
-                      <SelectItem value="greater_than">Greater Than</SelectItem>
-                      <SelectItem value="less_than">Less Than</SelectItem>
-                      <SelectItem value="is_empty">Is Empty</SelectItem>
-                      <SelectItem value="is_not_empty">Is Not Empty</SelectItem>
+                      {FIELD_COMPARISON_OPERATORS.map((op) => (
+                        <SelectItem key={op.value} value={op.value}>{op.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {!["is_empty", "is_not_empty"].includes(data.conditionOperator || "") && (
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] text-slate-500">Value</Label>
+                    <Input
+                      value={data.conditionValue || ""}
+                      onChange={(e) => update("conditionValue", e.target.value)}
+                      className="h-8 text-xs"
+                      placeholder="approved"
+                    />
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* ── Level 2: Pattern Match ── */}
+            {data.conditionMethod === "pattern_match" && (
+              <>
+                <div className="space-y-1.5">
+                  <Label className="text-[11px] text-slate-500">Match Against</Label>
+                  <Select
+                    value={data.patternField || "full_output"}
+                    onValueChange={(v) => update("patternField", v)}
+                  >
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="full_output">Full Output</SelectItem>
+                      <SelectItem value="specific_field">Specific Field</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-[11px] text-slate-500">Value</Label>
-                  <Input value={data.ruleValue || ""} onChange={(e) => update("ruleValue", e.target.value)} className="h-8 text-xs" />
+                  <Label className="text-[11px] text-slate-500">Operator</Label>
+                  <Select
+                    value={data.patternOperator || "contains"}
+                    onValueChange={(v) => update("patternOperator", v)}
+                  >
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="contains">Contains</SelectItem>
+                      <SelectItem value="regex">Regex</SelectItem>
+                      <SelectItem value="starts_with">Starts With</SelectItem>
+                      <SelectItem value="ends_with">Ends With</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[11px] text-slate-500">Pattern</Label>
+                  <Input
+                    value={data.patternValue || ""}
+                    onChange={(e) => update("patternValue", e.target.value)}
+                    className="h-8 text-xs"
+                    placeholder={data.patternOperator === "regex" ? "^(yes|approved)" : "approved"}
+                  />
                 </div>
               </>
             )}
 
+            {/* ── Level 3: Multi-Condition ── */}
+            {data.conditionMethod === "multi_condition" && (
+              <>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[11px] text-slate-500">Combinator</Label>
+                    <div className="flex rounded border border-slate-200 text-[10px] overflow-hidden">
+                      <button
+                        className={`px-2 py-0.5 ${data.conditionCombinator !== "OR" ? "bg-amber-500 text-white" : "bg-white text-slate-600"}`}
+                        onClick={() => update("conditionCombinator", "AND")}
+                      >
+                        AND
+                      </button>
+                      <button
+                        className={`px-2 py-0.5 ${data.conditionCombinator === "OR" ? "bg-amber-500 text-white" : "bg-white text-slate-600"}`}
+                        onClick={() => update("conditionCombinator", "OR")}
+                      >
+                        OR
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  {conditionRules.map((rule, idx) => (
+                    <div key={idx} className="flex items-center gap-1">
+                      <Input
+                        value={rule.field}
+                        onChange={(e) => updateRule(idx, "field", e.target.value)}
+                        className="h-7 min-w-0 flex-1 text-xs"
+                        placeholder="field"
+                      />
+                      <Select value={rule.operator} onValueChange={(v) => updateRule(idx, "operator", v)}>
+                        <SelectTrigger className="h-7 w-24 shrink-0 text-[10px]"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {FIELD_COMPARISON_OPERATORS.map((op) => (
+                            <SelectItem key={op.value} value={op.value}>{op.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        value={rule.value}
+                        onChange={(e) => updateRule(idx, "value", e.target.value)}
+                        className="h-7 min-w-0 flex-1 text-xs"
+                        placeholder="value"
+                      />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="size-7 shrink-0 p-0 text-slate-400 hover:text-red-500"
+                        onClick={() => removeRule(idx)}
+                      >
+                        <X className="size-3" />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-full text-xs"
+                    onClick={addRule}
+                  >
+                    <Plus className="mr-1 size-3" />
+                    Add Rule
+                  </Button>
+                </div>
+              </>
+            )}
+
+            {/* ── Level 4: LLM Evaluation ── */}
             {data.conditionMethod === "llm_evaluation" && (
               <>
                 <div className="space-y-1.5">
@@ -166,9 +375,18 @@ export default function EdgeInspector({
                   <Textarea
                     value={data.conditionPrompt || ""}
                     onChange={(e) => update("conditionPrompt", e.target.value)}
-                    placeholder="Is the output complete and accurate?"
+                    placeholder="Is the output complete and accurate? Reply YES or NO."
                     rows={3}
                     className="text-xs"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[11px] text-slate-500">Evaluator Model</Label>
+                  <Input
+                    value={data.evaluatorModel || ""}
+                    onChange={(e) => update("evaluatorModel", e.target.value)}
+                    className="h-8 text-xs"
+                    placeholder="gpt-4o-mini"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -180,36 +398,65 @@ export default function EdgeInspector({
                   />
                   <span className="text-[10px] text-slate-400">{(data.confidenceThreshold ?? 0.7).toFixed(2)}</span>
                 </div>
+                {/* Response mapping */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[11px] text-slate-500">Response Mapping</Label>
+                    <Button variant="ghost" size="sm" className="h-5 p-0 text-[10px] text-slate-400 hover:text-slate-600" onClick={addEvalMappingRow}>
+                      <Plus className="mr-0.5 size-2.5" /> Add
+                    </Button>
+                  </div>
+                  {Object.entries(evalMapping).map(([key, val], idx) => (
+                    <div key={idx} className="flex items-center gap-1">
+                      <Input
+                        value={key}
+                        onChange={(e) => updateEvalMappingKey(key, e.target.value)}
+                        className="h-7 min-w-0 flex-1 text-xs"
+                        placeholder="YES"
+                      />
+                      <span className="shrink-0 text-[10px] text-slate-400">→</span>
+                      <Input
+                        value={val as string}
+                        onChange={(e) => updateEvalMappingValue(key, e.target.value)}
+                        className="h-7 min-w-0 flex-1 text-xs"
+                        placeholder="node_output"
+                      />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="size-7 shrink-0 p-0 text-slate-400 hover:text-red-500"
+                        onClick={() => removeEvalMappingRow(key)}
+                      >
+                        <X className="size-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               </>
             )}
 
-            {data.conditionMethod === "score_comparison" && (
+            {/* ── Level 5: Webhook Function ── */}
+            {data.conditionMethod === "webhook_function" && (
               <>
                 <div className="space-y-1.5">
-                  <Label className="text-[11px] text-slate-500">Score Field</Label>
-                  <Input value={data.scoreField || ""} onChange={(e) => update("scoreField", e.target.value)} className="h-8 text-xs" placeholder="confidence" />
+                  <Label className="text-[11px] text-slate-500">Webhook URL</Label>
+                  <Input
+                    value={data.webhookUrl || ""}
+                    onChange={(e) => update("webhookUrl", e.target.value)}
+                    className="h-8 text-xs"
+                    placeholder="https://api.example.com/route"
+                  />
                 </div>
-                <div className="flex gap-2">
-                  <Select value={data.scoreOperator || ">"} onValueChange={(v) => update("scoreOperator", v)}>
-                    <SelectTrigger className="h-8 w-20 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value=">">{">"}</SelectItem>
-                      <SelectItem value=">=">{">="}</SelectItem>
-                      <SelectItem value="<">{"<"}</SelectItem>
-                      <SelectItem value="<=">{"<="}</SelectItem>
-                      <SelectItem value="==">{"=="}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Input type="number" value={data.scoreThreshold ?? 0.5} onChange={(e) => update("scoreThreshold", parseFloat(e.target.value))} className="h-8 text-xs" />
+                <div className="space-y-1.5">
+                  <Label className="text-[11px] text-slate-500">Response Field</Label>
+                  <Input
+                    value={data.webhookResponseField || ""}
+                    onChange={(e) => update("webhookResponseField", e.target.value)}
+                    className="h-8 text-xs"
+                    placeholder="result.route"
+                  />
                 </div>
               </>
-            )}
-
-            {data.conditionMethod === "regex_match" && (
-              <div className="space-y-1.5">
-                <Label className="text-[11px] text-slate-500">Regex Pattern</Label>
-                <Input value={data.regexPattern || ""} onChange={(e) => update("regexPattern", e.target.value)} className="h-8 text-xs" placeholder="^(yes|approved)" />
-              </div>
             )}
           </div>
         )}
@@ -253,6 +500,71 @@ export default function EdgeInspector({
             </div>
           </div>
         )}
+
+        {/* === Input/Output Mapping (all edge types) === */}
+        <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50/50 p-3">
+          <div className="flex items-center justify-between">
+            <Label className="text-xs font-semibold text-slate-600">Input / Output Mapping</Label>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 p-0 text-[10px] text-slate-400 hover:text-slate-600"
+              onClick={addIoRow}
+            >
+              <Plus className="mr-0.5 size-2.5" /> Add
+            </Button>
+          </div>
+
+          {ioMapping.length === 0 && (
+            <p className="text-[10px] text-slate-400">No mappings. Click Add to define field transforms.</p>
+          )}
+
+          {ioMapping.map((row, idx) => (
+            <div key={idx} className="space-y-1 rounded border border-slate-200 bg-white p-2">
+              <div className="flex items-center gap-1">
+                <Input
+                  value={row.targetField}
+                  onChange={(e) => updateIoRow(idx, "targetField", e.target.value)}
+                  className="h-7 min-w-0 flex-1 text-xs"
+                  placeholder="target field"
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="size-7 shrink-0 p-0 text-slate-400 hover:text-red-500"
+                  onClick={() => removeIoRow(idx)}
+                >
+                  <X className="size-3" />
+                </Button>
+              </div>
+              <Input
+                value={row.sourceExpression}
+                onChange={(e) => updateIoRow(idx, "sourceExpression", e.target.value)}
+                className="h-7 text-xs"
+                placeholder="source expression"
+              />
+              <Select value={row.transform} onValueChange={(v) => updateIoRow(idx, "transform", v)}>
+                <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="direct">Direct</SelectItem>
+                  <SelectItem value="template">Template</SelectItem>
+                  <SelectItem value="lookup">Lookup</SelectItem>
+                  <SelectItem value="jsonpath">JSONPath</SelectItem>
+                  <SelectItem value="type_cast">Type Cast</SelectItem>
+                  <SelectItem value="expression">Expression</SelectItem>
+                </SelectContent>
+              </Select>
+              {row.transform !== "direct" && (
+                <Input
+                  value={row.transformConfig || ""}
+                  onChange={(e) => updateIoRow(idx, "transformConfig", e.target.value)}
+                  className="h-7 text-xs"
+                  placeholder="transform config"
+                />
+              )}
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Delete */}
