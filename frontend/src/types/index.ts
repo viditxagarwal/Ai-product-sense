@@ -372,6 +372,11 @@ export interface ConfigurationResponse {
   temperature: number;
   max_output_tokens: number;
   top_p: number;
+  thinking_enabled: boolean;
+  thinking_budget_tokens: number;
+  reasoning_effort: string | null;
+  stop_sequences: string[];
+  json_schema: Record<string, unknown> | null;
 
   // Memory & Context
   memory_type: string;
@@ -525,6 +530,21 @@ export interface ExecutionRun {
   step_count: number;
   created_at: string;
   completed_at: string | null;
+
+  // Layer 4 fields
+  workflow_id?: string | null;
+  configuration_id?: string | null;
+  config_snapshot?: Record<string, unknown> | null;
+  path_taken?: string[];
+  total_llm_calls?: number;
+  total_tool_calls?: number;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  total_thinking_tokens?: number;
+  models_used?: string[];
+  tools_used?: string[];
+  cost_by_model?: Record<string, number>;
+  cost_by_node?: Record<string, number>;
 }
 
 export type FileOperationType = "creation" | "targeted_edit" | "append" | "bulk_rewrite" | "none";

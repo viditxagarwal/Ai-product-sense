@@ -15,6 +15,11 @@ export const CONFIG_DEFAULTS: Record<string, unknown> = {
   temperature: 0.2,
   max_output_tokens: 4096,
   top_p: 0.9,
+  thinking_enabled: false,
+  thinking_budget_tokens: 0,
+  reasoning_effort: null,
+  stop_sequences: [],
+  json_schema: null,
 
   // Memory & Context
   memory_type: "token_buffer",
@@ -122,11 +127,18 @@ export const CONFIG_DEFAULTS: Record<string, unknown> = {
 export const MODEL_OPTIONS = [
   { value: "claude-sonnet-4", label: "Claude Sonnet 4" },
   { value: "claude-opus-4", label: "Claude Opus 4" },
-  { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
+  { value: "claude-haiku-3.5", label: "Claude Haiku 3.5" },
   { value: "gpt-4o", label: "GPT-4o" },
   { value: "gpt-4o-mini", label: "GPT-4o Mini" },
-  { value: "gpt-4-turbo", label: "GPT-4 Turbo" },
+  { value: "gpt-4.1", label: "GPT-4.1" },
+  { value: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
+  { value: "o1", label: "o1" },
+  { value: "o1-mini", label: "o1 Mini" },
+  { value: "o3", label: "o3" },
+  { value: "o3-mini", label: "o3 Mini" },
+  { value: "o4-mini", label: "o4 Mini" },
   { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
+  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
   { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
 ];
 

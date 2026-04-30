@@ -147,14 +147,32 @@ def _get_thread_context(thread_id: str) -> dict:
     result["system_prompt"] = system_prompt
 
     # Model from config
-    result["model"] = cfg.data.get("primary_model", "gpt-4o-mini") if cfg.data else "gpt-4o-mini"
-    result["temperature"] = float(cfg.data.get("temperature", 0.2)) if cfg.data else 0.2
-    result["max_tokens"] = cfg.data.get("max_output_tokens", 4096) if cfg.data else 4096
+    c = cfg.data if cfg.data else {}
+    result["model"] = c.get("primary_model", "gpt-4o-mini")
+    result["temperature"] = float(c.get("temperature", 0.2))
+    result["max_tokens"] = c.get("max_output_tokens", 4096)
+    result["top_p"] = float(c.get("top_p", 1.0))
+
+    # Tool behavior
+    result["max_tool_calls_per_node"] = c.get("max_tool_calls_per_node", 10)
+    result["parallel_tool_calls"] = c.get("parallel_tool_calls", True)
+    result["tool_call_timeout"] = c.get("tool_call_timeout", 30)
+    result["tool_retry_on_failure"] = c.get("tool_retry_on_failure", 0)
+
+    # Memory
+    result["buffer_size_messages"] = c.get("buffer_size_messages", 20)
+
+    # Advanced LLM params
+    result["stop_sequences"] = c.get("stop_sequences") or None
+    result["json_schema"] = c.get("json_schema") or None
+    result["thinking_enabled"] = c.get("thinking_enabled", False)
+    result["thinking_budget_tokens"] = c.get("thinking_budget_tokens", 0)
+    result["reasoning_effort"] = c.get("reasoning_effort") or None
 
     return result
 
 
-def _get_conversation_history(thread_id: str, limit: int = 20) -> list[dict]:
+def _get_conversation_history(thread_id: str, limit: int = 50) -> list[dict]:
     """Fetch recent messages for the thread to include as conversation context."""
     resp = (
         supabase.table("thread_messages")
@@ -191,12 +209,14 @@ async def _direct_llm_call(
     system_prompt = ctx["system_prompt"]
     temperature = ctx["temperature"]
     max_tokens = ctx["max_tokens"]
+    top_p = ctx.get("top_p", 1.0)
+    buffer_size = ctx.get("buffer_size_messages", 20)
 
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
 
-    history = _get_conversation_history(thread_id)
+    history = _get_conversation_history(thread_id, limit=buffer_size)
     if history and history[-1]["role"] == "user" and history[-1]["content"] == user_message:
         history = history[:-1]
     messages.extend(history)
@@ -204,10 +224,13 @@ async def _direct_llm_call(
 
     logger.info("[exec] Direct LLM call: model=%s messages=%d fallback=%s", model, len(messages), is_fallback)
 
-    # Create a run record
+    # Create a run record with Layer 4 fields
     run = supabase.table("execution_runs").insert({
         "thread_id": thread_id,
         "status": "running",
+        "workflow_id": ctx.get("workflow_id"),
+        "configuration_id": ctx.get("configuration_id"),
+        "config_snapshot": _build_full_config_snapshot(ctx),
     }).execute()
     run_id = run.data[0]["id"]
 
@@ -288,8 +311,14 @@ async def _direct_llm_call(
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            top_p=top_p,
             streaming_ctx=streaming_ctx,
             on_thinking_delta=_on_thinking_delta_direct,
+            stop_sequences=ctx.get("stop_sequences"),
+            json_schema=ctx.get("json_schema"),
+            thinking_enabled=ctx.get("thinking_enabled", False),
+            thinking_budget_tokens=ctx.get("thinking_budget_tokens", 0),
+            reasoning_effort=ctx.get("reasoning_effort"),
         ):
             full_response += chunk
             if streaming_mode == "token_by_token":
@@ -340,7 +369,14 @@ async def _direct_llm_call(
             "result_summary": f"Generated {len(full_response)} chars",
         })
 
-        # Complete run with totals
+        # Collect Layer 4 aggregates
+        models_used = list({c.model_id for c in streaming_ctx.llm_calls})
+        tools_used = list({c.tool_name for c in streaming_ctx.tool_calls})
+        cost_by_model: dict[str, float] = {}
+        for c in streaming_ctx.llm_calls:
+            cost_by_model[c.model_id] = cost_by_model.get(c.model_id, 0) + c.cost_usd
+
+        # Complete run with totals + Layer 4
         supabase.table("execution_runs").update({
             "status": "completed",
             "total_duration_ms": duration_ms,
@@ -348,6 +384,16 @@ async def _direct_llm_call(
             "total_cost_usd": round(streaming_ctx.total_cost_usd, 4),
             "step_count": 1,
             "completed_at": datetime.now(timezone.utc).isoformat(),
+            "total_input_tokens": streaming_ctx.total_input_tokens,
+            "total_output_tokens": streaming_ctx.total_output_tokens,
+            "total_thinking_tokens": streaming_ctx.total_thinking_tokens,
+            "total_llm_calls": len(streaming_ctx.llm_calls),
+            "total_tool_calls": len(streaming_ctx.tool_calls),
+            "path_taken": ["direct"],
+            "models_used": models_used,
+            "tools_used": tools_used,
+            "cost_by_model": {k: round(v, 6) for k, v in cost_by_model.items()},
+            "cost_by_node": {"direct": round(streaming_ctx.total_cost_usd, 6)},
         }).eq("id", run_id).execute()
 
         await emitter.workflow_completed(
@@ -486,11 +532,17 @@ async def _execute_workflow_graph(
     system_prompt = ctx["system_prompt"]
     temperature = ctx["temperature"]
     max_tokens = ctx["max_tokens"]
+    top_p = ctx.get("top_p", 1.0)
+    buffer_size = ctx.get("buffer_size_messages", 20)
 
-    # Create run
+    # Create run with Layer 4 fields
+    workflow = ctx.get("workflow", {})
     run = supabase.table("execution_runs").insert({
         "thread_id": thread_id,
         "status": "running",
+        "workflow_id": ctx.get("workflow_id"),
+        "configuration_id": ctx.get("configuration_id"),
+        "config_snapshot": _build_full_config_snapshot(ctx),
     }).execute()
     run_id = run.data[0]["id"]
 
@@ -499,8 +551,6 @@ async def _execute_workflow_graph(
 
     # Create event emitter for this run
     emitter = EventEmitter(run_id, send_event)
-
-    workflow = ctx.get("workflow", {})
     await emitter.workflow_started(
         workflow_id=workflow.get("id", ""),
         workflow_name=workflow.get("workflow_name", ""),
@@ -517,17 +567,24 @@ async def _execute_workflow_graph(
         "config_snapshot": config_snapshot,
     })
 
-    history = _get_conversation_history(thread_id)
+    history = _get_conversation_history(thread_id, limit=buffer_size)
     if history and history[-1]["role"] == "user" and history[-1]["content"] == user_message:
         history = history[:-1]
 
     last_output = ""
     total_duration = 0
     total_tokens = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_thinking_tokens = 0
     total_cost = 0.0
     total_llm_calls = 0
     total_tool_calls = 0
-    path_taken = []
+    path_taken: list[str] = []
+    all_models_used: set[str] = set()
+    all_tools_used: set[str] = set()
+    cost_by_model: dict[str, float] = {}
+    cost_by_node: dict[str, float] = {}
     start_time = time.monotonic()
 
     try:
@@ -616,12 +673,19 @@ async def _execute_workflow_graph(
                 input_context_source="previous_step" if last_output else "user_message",
             )
 
+            elapsed_so_far = int((time.monotonic() - start_time) * 1000)
+            progress_pct = round((step_number - 1) / len(nodes) * 100, 1)
+
             await send_event({
                 "type": "step_started",
                 "step_id": step_id,
                 "step_number": step_number,
                 "node_type": component_type or node_type,
                 "node_name": node_name,
+                "progress_pct": progress_pct,
+                "cost_so_far": round(total_cost, 6),
+                "elapsed_ms": elapsed_so_far,
+                "tokens_so_far": total_tokens,
             })
 
             step_start = time.monotonic()
@@ -810,6 +874,7 @@ async def _execute_workflow_graph(
                     messages=node_messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    top_p=top_p,
                     tools=openai_tools,
                     tool_executor_fn=tool_exec_fn,
                     streaming_ctx=streaming_ctx,
@@ -818,6 +883,15 @@ async def _execute_workflow_graph(
                     on_tool_start=_on_tool_start,
                     on_tool_complete=_on_tool_complete,
                     on_thinking_delta=_on_thinking_delta_node,
+                    max_tool_rounds=ctx.get("max_tool_calls_per_node", 10),
+                    parallel_tool_calls=ctx.get("parallel_tool_calls", True),
+                    tool_call_timeout=ctx.get("tool_call_timeout", 30),
+                    tool_retry_on_failure=ctx.get("tool_retry_on_failure", 0),
+                    stop_sequences=ctx.get("stop_sequences"),
+                    json_schema=ctx.get("json_schema"),
+                    thinking_enabled=ctx.get("thinking_enabled", False),
+                    thinking_budget_tokens=ctx.get("thinking_budget_tokens", 0),
+                    reasoning_effort=ctx.get("reasoning_effort"),
                 ):
                     step_output += chunk
                     if graph_streaming_mode == "token_by_token":
@@ -850,10 +924,21 @@ async def _execute_workflow_graph(
             duration_ms = int((time.monotonic() - step_start) * 1000)
             total_duration += duration_ms
             total_tokens += streaming_ctx.total_tokens
+            total_input_tokens += streaming_ctx.total_input_tokens
+            total_output_tokens += streaming_ctx.total_output_tokens
+            total_thinking_tokens += streaming_ctx.total_thinking_tokens
             total_cost += streaming_ctx.total_cost_usd
             total_llm_calls += len(streaming_ctx.llm_calls)
             total_tool_calls += len(streaming_ctx.tool_calls)
             last_output = step_output
+
+            # Layer 4 aggregates
+            for c in streaming_ctx.llm_calls:
+                all_models_used.add(c.model_id)
+                cost_by_model[c.model_id] = cost_by_model.get(c.model_id, 0) + c.cost_usd
+            for c in streaming_ctx.tool_calls:
+                all_tools_used.add(c.tool_name)
+            cost_by_node[node_id] = round(streaming_ctx.total_cost_usd, 6)
 
             supabase.table("execution_steps").update({
                 "status": "completed",
@@ -880,6 +965,9 @@ async def _execute_workflow_graph(
                 parent_event_id=node_event_id,
             )
 
+            progress_pct_done = round(step_number / len(nodes) * 100, 1)
+            elapsed_total = int((time.monotonic() - start_time) * 1000)
+
             await send_event({
                 "type": "step_completed",
                 "step_id": step_id,
@@ -888,6 +976,10 @@ async def _execute_workflow_graph(
                 "tokens": streaming_ctx.total_tokens,
                 "cost_usd": round(streaming_ctx.total_cost_usd, 6),
                 "result_summary": f"Generated {len(step_output)} chars in {duration_ms}ms",
+                "progress_pct": progress_pct_done,
+                "cost_so_far": round(total_cost, 6),
+                "elapsed_ms": elapsed_total,
+                "tokens_so_far": total_tokens,
             })
 
         # ── All nodes done ───────────────────────────────────
@@ -898,6 +990,16 @@ async def _execute_workflow_graph(
             "total_cost_usd": round(total_cost, 4),
             "step_count": len(nodes),
             "completed_at": datetime.now(timezone.utc).isoformat(),
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "total_thinking_tokens": total_thinking_tokens,
+            "total_llm_calls": total_llm_calls,
+            "total_tool_calls": total_tool_calls,
+            "path_taken": path_taken,
+            "models_used": list(all_models_used),
+            "tools_used": list(all_tools_used),
+            "cost_by_model": {k: round(v, 6) for k, v in cost_by_model.items()},
+            "cost_by_node": cost_by_node,
         }).eq("id", run_id).execute()
 
         await emitter.workflow_completed(
@@ -914,6 +1016,13 @@ async def _execute_workflow_graph(
             "total_cost_usd": round(total_cost, 6),
             "total_llm_calls": total_llm_calls,
             "total_tool_calls": total_tool_calls,
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "total_thinking_tokens": total_thinking_tokens,
+            "progress_pct": 100.0,
+            "path_taken": path_taken,
+            "models_used": list(all_models_used),
+            "tools_used": list(all_tools_used),
         })
 
         # Save execution trace message (for inspector CTA in chat)

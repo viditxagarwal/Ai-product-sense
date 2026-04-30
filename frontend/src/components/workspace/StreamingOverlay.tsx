@@ -187,7 +187,7 @@ function StepChecklist({ steps }: D7Props) {
 // ─── main component ───────────────────────────────────────────────────────────
 
 export default function StreamingOverlay() {
-  const { isStreaming, activeRun, activeSteps } = useExecutionStore();
+  const { isStreaming, activeRun, activeSteps, displaySettings } = useExecutionStore();
 
   // Elapsed timer
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -210,9 +210,10 @@ export default function StreamingOverlay() {
     return () => clearInterval(id);
   }, [isStreaming, activeRun?.created_at]);
 
-  // Don't show overlay if not streaming or if the run already completed/failed
+  // Don't show overlay if not streaming, run is done, or user toggled it off
   const runDone = activeRun?.status === "completed" || activeRun?.status === "failed" || activeRun?.status === "cancelled";
   if (!isStreaming || runDone) return null;
+  if (displaySettings && !displaySettings.show_progress_bar) return null;
 
   // Derived counters
   const totalTokens = activeSteps.reduce(

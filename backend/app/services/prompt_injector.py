@@ -75,6 +75,43 @@ def build_config_injections(config: dict) -> str:
     if disclaimer in disclaimer_map:
         injections.append(disclaimer_map[disclaimer])
 
+    # ── Output format ───────────────────────────────────────
+    output_format = config.get("output_format", "markdown")
+    format_map = {
+        "markdown": "Format your response in Markdown.",
+        "structured_json": "Return your response as valid JSON.",
+        "html": "Format your response as clean HTML.",
+    }
+    if output_format in format_map:
+        injections.append(format_map[output_format])
+
+    # ── Citation format ─────────────────────────────────────
+    citation = config.get("citation_format", "none")
+    citation_map = {
+        "inline_parenthetical": "Cite sources inline using parenthetical references, e.g., (Source Name, 2024).",
+        "footnotes": "Use numbered footnotes for citations. List all references at the end.",
+        "end_references": "Collect all references and list them at the end of your response.",
+        "linked_highlights": "Hyperlink key claims to their source URLs where possible.",
+    }
+    if citation in citation_map:
+        injections.append(citation_map[citation])
+
+    # ── Max output length ───────────────────────────────────
+    max_length = config.get("max_output_length", 4000)
+    if max_length and max_length < 4000:
+        injections.append(f"Keep your response under approximately {max_length} characters.")
+
+    # ── Missing info strategy ───────────────────────────────
+    missing = config.get("missing_info_strategy", "hybrid")
+    missing_map = {
+        "ask_user": "If you are missing information needed to answer, ask the user for it before proceeding.",
+        "search_external": "If data is missing, attempt to search external sources before answering.",
+        "use_defaults": "If information is missing, use reasonable defaults and note your assumptions.",
+        "estimate_with_reasoning": "If data is missing, estimate with explicit reasoning and flag the estimate.",
+    }
+    if missing in missing_map:
+        injections.append(missing_map[missing])
+
     # ── Combine ──────────────────────────────────────────────
     if not injections:
         return ""

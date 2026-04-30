@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useExecutionStore } from "@/stores/execution-store";
 import type { ExecutionSummary, ExecutionEvent, ExecutionStep, LLMCallData } from "@/types";
 
 // ─── Color Palettes ───────────────────────────────────────────────────────────
@@ -513,6 +514,8 @@ export default function AnalyticsPanel({
   steps,
   events,
 }: AnalyticsPanelProps) {
+  const { displaySettings: ds } = useExecutionStore();
+
   return (
     <div className="flex flex-col gap-3 p-3 overflow-y-auto">
       {/* Quick stats strip */}
@@ -537,11 +540,15 @@ export default function AnalyticsPanel({
         ))}
       </div>
 
-      {/* E1 */}
-      <CostBreakdown summary={summary} />
+      {/* E1 — gated by show_cost_breakdown */}
+      {(ds?.show_cost_breakdown ?? true) && (
+        <CostBreakdown summary={summary} />
+      )}
 
-      {/* E3 */}
-      <LatencyWaterfall summary={summary} steps={steps} />
+      {/* E3 — gated by show_latency_waterfall */}
+      {(ds?.show_latency_waterfall ?? true) && (
+        <LatencyWaterfall summary={summary} steps={steps} />
+      )}
 
       {/* E4 */}
       <ModelUsageTable events={events} />

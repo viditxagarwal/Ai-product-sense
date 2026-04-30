@@ -289,7 +289,7 @@ async def _test_financial(client: httpx.AsyncClient, provider: str, api_key: str
 # ---------------------------------------------------------------------------
 
 PROVIDER_MODELS: dict[str, list[str]] = {
-    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o1", "o1-mini"],
+    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o1", "o1-mini", "o3", "o3-mini", "o4-mini"],
     "anthropic": ["claude-opus-4", "claude-sonnet-4", "claude-haiku-3.5"],
     "groq": ["llama-3.3-70b", "llama-3.1-8b", "mixtral-8x7b", "gemma2-9b"],
     "google_ai": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],

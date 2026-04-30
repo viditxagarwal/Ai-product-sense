@@ -24,6 +24,21 @@ class ExecutionRunResponse(BaseModel):
     created_at: datetime
     completed_at: Optional[datetime]
 
+    # Layer 4 fields
+    workflow_id: Optional[UUID] = None
+    configuration_id: Optional[UUID] = None
+    config_snapshot: Optional[dict] = None
+    path_taken: list[str] = []
+    total_llm_calls: int = 0
+    total_tool_calls: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_thinking_tokens: int = 0
+    models_used: list[str] = []
+    tools_used: list[str] = []
+    cost_by_model: dict = {}
+    cost_by_node: dict = {}
+
 
 class ExecutionStepCreate(BaseModel):
     run_id: UUID

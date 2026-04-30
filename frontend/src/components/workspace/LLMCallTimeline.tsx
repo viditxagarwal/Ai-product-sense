@@ -24,9 +24,10 @@ interface Props {
   toolEvents: ExecutionEvent[];
   showThinking?: boolean;
   showRawMessages?: boolean;
+  showSystemPrompts?: boolean;
 }
 
-export default function LLMCallTimeline({ llmEvents, toolEvents, showThinking = true, showRawMessages = false }: Props) {
+export default function LLMCallTimeline({ llmEvents, toolEvents, showThinking = true, showRawMessages = false, showSystemPrompts = true }: Props) {
   if (llmEvents.length === 0) return null;
 
   return (
@@ -51,6 +52,7 @@ export default function LLMCallTimeline({ llmEvents, toolEvents, showThinking = 
               toolEvents={interToolEvents}
               showThinking={showThinking}
               showRawMessages={showRawMessages}
+              showSystemPrompts={showSystemPrompts}
             />
           );
         })}
@@ -70,12 +72,14 @@ function LLMCallCard({
   toolEvents,
   showThinking,
   showRawMessages,
+  showSystemPrompts,
 }: {
   callIndex: number;
   data: LLMCallData;
   toolEvents: ExecutionEvent[];
   showThinking: boolean;
   showRawMessages: boolean;
+  showSystemPrompts: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const hasThinking = showThinking && data.thinking_text && data.thinking_text.length > 0;
@@ -158,6 +162,11 @@ function LLMCallCard({
             )}
           </div>
 
+          {/* System Prompt (gated by show_system_prompts) */}
+          {showSystemPrompts && data.system_prompt && (
+            <SystemPromptBlock text={data.system_prompt} />
+          )}
+
           {/* C5: Thinking Block */}
           {hasThinking && (
             <ThinkingBlock text={data.thinking_text} tokens={data.thinking_tokens} />
@@ -196,6 +205,28 @@ function LLMCallCard({
           {toolEvents.map((te) => (
             <ToolCallCard key={te.id} event={te} />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SystemPromptBlock({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="rounded border border-slate-200 bg-slate-50/50">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center gap-1.5 px-2 py-1 text-left"
+      >
+        {expanded ? <ChevronDown className="size-3 text-slate-400" /> : <ChevronRight className="size-3 text-slate-400" />}
+        <span className="text-[10px] font-medium text-slate-500">System Prompt</span>
+        <span className="text-[9px] text-slate-400">{text.length} chars</span>
+      </button>
+      {expanded && (
+        <div className="max-h-48 overflow-auto border-t border-slate-200 px-2 py-1.5 text-[10px] text-slate-600 whitespace-pre-wrap">
+          {text}
         </div>
       )}
     </div>

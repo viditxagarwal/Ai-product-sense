@@ -24,6 +24,11 @@ class ConfigurationCreate(BaseModel):
     temperature: float = 0.2
     max_output_tokens: int = 4096
     top_p: float = 0.9
+    thinking_enabled: bool = False
+    thinking_budget_tokens: int = 0
+    reasoning_effort: Optional[Literal['low', 'medium', 'high']] = None
+    stop_sequences: list[str] = []
+    json_schema: Optional[dict] = None
 
     # 7.2 Memory & Context
     memory_type: Literal['buffer', 'buffer_window', 'summary', 'token_buffer', 'vector_store', 'combined'] = 'token_buffer'

@@ -284,6 +284,7 @@ const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
                   toolEvents={(ds?.show_tool_call_details ?? true) ? toolCallEvents : []}
                   showThinking={ds?.show_thinking ?? true}
                   showRawMessages={ds?.show_raw_messages ?? false}
+                  showSystemPrompts={ds?.show_system_prompts ?? true}
                 />
               )}
 

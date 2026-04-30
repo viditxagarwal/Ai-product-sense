@@ -11,7 +11,7 @@ import { useExecutionStore } from "@/stores/execution-store";
  * the configuration's streaming_mode is "token_by_token".
  */
 export default function StreamingChatBubble() {
-  const { streamingText, streamingThinkingText, isThinking } =
+  const { streamingText, streamingThinkingText, isThinking, displaySettings } =
     useExecutionStore();
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -19,9 +19,13 @@ export default function StreamingChatBubble() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [streamingText, streamingThinkingText]);
 
+  // Respect display settings toggles
+  const showText = displaySettings?.stream_text ?? true;
+  const showThinking = displaySettings?.stream_thinking ?? true;
+
   // Only render when there is actual streaming content from text_delta/thinking_delta
-  const hasThinking = streamingThinkingText.length > 0;
-  const hasText = streamingText.length > 0;
+  const hasThinking = showThinking && streamingThinkingText.length > 0;
+  const hasText = showText && streamingText.length > 0;
   if (!hasThinking && !hasText) return null;
 
   return (

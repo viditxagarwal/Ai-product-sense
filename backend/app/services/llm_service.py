@@ -7,6 +7,7 @@ cost, latency, TTFT, request_id, etc.
 Supports OpenAI, Anthropic, and Google AI providers.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -205,6 +206,7 @@ async def call_llm_streaming(
     messages: list[dict],
     temperature: float = 0.2,
     max_tokens: int = 4096,
+    top_p: float = 1.0,
     tools: list[dict] | None = None,
     tool_executor_fn=None,
     streaming_ctx: StreamingContext | None = None,
@@ -213,6 +215,15 @@ async def call_llm_streaming(
     on_tool_start=None,
     on_tool_complete=None,
     on_thinking_delta=None,
+    max_tool_rounds: int = 5,
+    parallel_tool_calls: bool = True,
+    tool_call_timeout: int = 30,
+    tool_retry_on_failure: int = 0,
+    stop_sequences: list[str] | None = None,
+    json_schema: dict | None = None,
+    thinking_enabled: bool = False,
+    thinking_budget_tokens: int = 0,
+    reasoning_effort: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream tokens from an LLM. Yields text chunks.
 
@@ -229,6 +240,15 @@ async def call_llm_streaming(
         on_tool_start: async fn(tool_name, arguments) called before tool execution
         on_tool_complete: async fn(ToolCallResult) called after tool execution
         on_thinking_delta: async fn(text) called for each thinking token chunk (Anthropic)
+        max_tool_rounds: max LLM↔tool round-trips (from config max_tool_calls_per_node)
+        parallel_tool_calls: whether OpenAI may batch tool calls
+        tool_call_timeout: seconds before a tool execution times out
+        tool_retry_on_failure: number of retries on tool error
+        stop_sequences: custom stop sequences for the LLM
+        json_schema: JSON schema for structured output (OpenAI response_format)
+        thinking_enabled: enable extended thinking (Anthropic)
+        thinking_budget_tokens: budget for thinking tokens (Anthropic)
+        reasoning_effort: reasoning effort level for o-series models (low/medium/high)
     """
     provider = _resolve_provider(model)
     logger.info("[llm] Resolved provider=%s for model=%s", provider, model)
@@ -254,6 +274,10 @@ async def call_llm_streaming(
         async for chunk in _call_anthropic_streaming_enhanced(
             api_key, model, messages, temperature, max_tokens, ctx, system_prompt,
             on_llm_call_start, on_llm_call_complete, on_thinking_delta,
+            top_p=top_p,
+            stop_sequences=stop_sequences,
+            thinking_enabled=thinking_enabled,
+            thinking_budget_tokens=thinking_budget_tokens,
         ):
             yield chunk
         return
@@ -262,6 +286,8 @@ async def call_llm_streaming(
         async for chunk in _call_google_streaming_enhanced(
             api_key, model, messages, temperature, max_tokens, ctx, system_prompt,
             on_llm_call_start, on_llm_call_complete,
+            top_p=top_p,
+            stop_sequences=stop_sequences,
         ):
             yield chunk
         return
@@ -270,11 +296,10 @@ async def call_llm_streaming(
     base_url = key_data.get("base_url") or PROVIDER_BASE_URLS.get(provider, "https://api.openai.com/v1")
     client = AsyncOpenAI(api_key=api_key, base_url=base_url)
 
-    logger.info("[llm] Calling %s with %d messages, %d tools (model=%s, temp=%.1f)",
-                provider, len(messages), len(tools or []), model, temperature)
+    logger.info("[llm] Calling %s with %d messages, %d tools (model=%s, temp=%.1f, top_p=%.2f)",
+                provider, len(messages), len(tools or []), model, temperature, top_p)
 
     current_messages = list(messages)
-    max_tool_rounds = 5
     call_index = 0
 
     for round_num in range(max_tool_rounds + 1):
@@ -283,6 +308,7 @@ async def call_llm_streaming(
             provider=provider,
             input_messages=list(current_messages),
             temperature=temperature,
+            top_p=top_p,
             max_output_tokens=max_tokens,
             system_prompt=system_prompt,
         )
@@ -293,15 +319,35 @@ async def call_llm_streaming(
             await on_llm_call_start(call_index, model, current_messages)
 
         try:
-            create_kwargs = {
+            create_kwargs: dict[str, Any] = {
                 "model": model,
                 "messages": current_messages,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
+                "top_p": top_p,
             }
+
+            # Stop sequences
+            if stop_sequences:
+                create_kwargs["stop"] = stop_sequences
+
+            # Reasoning effort for o-series models (o1, o3, o4-mini, etc.)
+            if reasoning_effort and model.startswith(("o1", "o3", "o4")):
+                create_kwargs["reasoning_effort"] = reasoning_effort
+                # o-series models don't support temperature/top_p
+                create_kwargs.pop("temperature", None)
+                create_kwargs.pop("top_p", None)
+
+            # JSON schema structured output
+            if json_schema:
+                create_kwargs["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": json_schema,
+                }
 
             if tools and tool_executor_fn:
                 create_kwargs["tools"] = tools
+                create_kwargs["parallel_tool_calls"] = parallel_tool_calls
                 create_kwargs["stream"] = False
 
                 response = await client.chat.completions.create(**create_kwargs)
@@ -370,8 +416,32 @@ async def call_llm_streaming(
 
                         yield f"\n\n🔧 *Using {fn_name}...*\n\n"
 
+                        # Execute tool with timeout and retry
                         tool_start = time.monotonic()
-                        tool_result_str = await tool_executor_fn(fn_name, fn_args)
+                        tool_result_str = ""
+                        tool_error = ""
+                        tool_retries = 0
+
+                        for attempt in range(1 + tool_retry_on_failure):
+                            try:
+                                tool_result_str = await asyncio.wait_for(
+                                    tool_executor_fn(fn_name, fn_args),
+                                    timeout=tool_call_timeout,
+                                )
+                                tool_error = ""
+                                break
+                            except asyncio.TimeoutError:
+                                tool_error = f"Tool '{fn_name}' timed out after {tool_call_timeout}s"
+                                tool_retries = attempt + 1
+                                logger.warning("[llm] %s (attempt %d/%d)", tool_error, attempt + 1, 1 + tool_retry_on_failure)
+                            except Exception as te:
+                                tool_error = f"Tool '{fn_name}' failed: {te}"
+                                tool_retries = attempt + 1
+                                logger.warning("[llm] %s (attempt %d/%d)", tool_error, attempt + 1, 1 + tool_retry_on_failure)
+
+                        if tool_error and not tool_result_str:
+                            tool_result_str = json.dumps({"error": tool_error})
+
                         tool_elapsed = int((time.monotonic() - tool_start) * 1000)
 
                         # Capture Layer 2 data
@@ -384,20 +454,24 @@ async def call_llm_streaming(
                             output_summary=tool_result_str[:200] if tool_result_str else "",
                             output_type="json" if tool_result_str.startswith("{") else "text",
                             output_size_bytes=len(tool_result_str.encode()),
-                            status="success",
+                            status="error" if tool_error else "success",
+                            error_message=tool_error,
+                            error_type="timeout" if "timed out" in tool_error else ("tool_error" if tool_error else ""),
                             duration_ms=tool_elapsed,
                             triggered_by="llm_tool_call",
+                            retry_count=tool_retries,
                         )
 
-                        # Check for error in result
-                        try:
-                            parsed = json.loads(tool_result_str)
-                            if "error" in parsed:
-                                tool_result.status = "error"
-                                tool_result.error_message = parsed["error"]
-                                tool_result.error_type = "api_error"
-                        except (json.JSONDecodeError, TypeError):
-                            pass
+                        # Check for error in result (if not already caught)
+                        if not tool_error:
+                            try:
+                                parsed = json.loads(tool_result_str)
+                                if "error" in parsed:
+                                    tool_result.status = "error"
+                                    tool_result.error_message = parsed["error"]
+                                    tool_result.error_type = "api_error"
+                            except (json.JSONDecodeError, TypeError):
+                                pass
 
                         ctx.tool_calls.append(tool_result)
                         if on_tool_complete:
@@ -499,6 +573,10 @@ async def _call_anthropic_streaming_enhanced(
     ctx: StreamingContext, system_prompt: str,
     on_llm_call_start=None, on_llm_call_complete=None,
     on_thinking_delta=None,
+    top_p: float = 1.0,
+    stop_sequences: list[str] | None = None,
+    thinking_enabled: bool = False,
+    thinking_budget_tokens: int = 0,
 ) -> AsyncGenerator[str, None]:
     """Stream from Anthropic Messages API with full Layer 1 capture."""
     system_text = ""
@@ -512,15 +590,28 @@ async def _call_anthropic_streaming_enhanced(
     if not conv_messages:
         conv_messages = [{"role": "user", "content": "Hello"}]
 
-    body = {
+    body: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
+        "top_p": top_p,
         "messages": conv_messages,
         "stream": True,
     }
     if system_text.strip():
         body["system"] = system_text.strip()
+    if stop_sequences:
+        body["stop_sequences"] = stop_sequences
+
+    # Extended thinking (Anthropic)
+    if thinking_enabled and thinking_budget_tokens > 0:
+        body["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": thinking_budget_tokens,
+        }
+        # Anthropic requires removing temperature when thinking is enabled
+        body.pop("temperature", None)
+        body.pop("top_p", None)
 
     call_result = LLMCallResult(
         model_id=model,
@@ -545,7 +636,7 @@ async def _call_anthropic_streaming_enhanced(
             "https://api.anthropic.com/v1/messages",
             headers={
                 "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
+                "anthropic-version": "2024-10-22",
                 "Content-Type": "application/json",
             },
             json=body,
@@ -654,6 +745,8 @@ async def _call_google_streaming_enhanced(
     temperature: float, max_tokens: int,
     ctx: StreamingContext, system_prompt: str,
     on_llm_call_start=None, on_llm_call_complete=None,
+    top_p: float = 1.0,
+    stop_sequences: list[str] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream from Google AI (Gemini) with Layer 1 capture."""
     contents = []
@@ -669,12 +762,17 @@ async def _call_google_streaming_enhanced(
     if not contents:
         contents = [{"role": "user", "parts": [{"text": "Hello"}]}]
 
-    body = {
+    gen_config: dict[str, Any] = {
+        "temperature": temperature,
+        "maxOutputTokens": max_tokens,
+        "topP": top_p,
+    }
+    if stop_sequences:
+        gen_config["stopSequences"] = stop_sequences
+
+    body: dict[str, Any] = {
         "contents": contents,
-        "generationConfig": {
-            "temperature": temperature,
-            "maxOutputTokens": max_tokens,
-        },
+        "generationConfig": gen_config,
     }
     if system_text.strip():
         body["systemInstruction"] = {"parts": [{"text": system_text.strip()}]}

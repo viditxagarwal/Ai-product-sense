@@ -380,8 +380,18 @@ export default function ConfigForm() {
           <SliderField label="Temperature" fieldKey="temperature" form={form} onChange={update} min={0} max={2} step={0.1} />
           <SliderField label="Top P" fieldKey="top_p" form={form} onChange={update} min={0.1} max={1.0} step={0.05} />
         </div>
-        <div className="mt-4">
+        <div className="mt-4 space-y-3">
           <ToggleField label="Per-Node Model Override" fieldKey="per_node_model_override" form={form} onChange={update} description="Allow individual workflow nodes to use different models" />
+          <ToggleField label="Extended Thinking (Anthropic)" fieldKey="thinking_enabled" form={form} onChange={update} description="Enable extended thinking for Claude models" />
+          {Boolean(form.thinking_enabled) && (
+            <NumberField label="Thinking Budget (Tokens)" fieldKey="thinking_budget_tokens" form={form} onChange={update} min={1024} max={128000} step={1024} description="Max tokens for model thinking/reasoning" />
+          )}
+          <SelectField label="Reasoning Effort (OpenAI o-series)" fieldKey="reasoning_effort" form={{ ...form, reasoning_effort: form.reasoning_effort || "none" }} onChange={(k, v) => update(k, v === "none" ? null : v)} options={[
+            { value: "none", label: "Default" },
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+          ]} description="Controls reasoning depth for o1/o3/o4-mini models" />
         </div>
       </ConfigSection>
 
@@ -423,6 +433,41 @@ export default function ConfigForm() {
           <SelectField label="Reranking" fieldKey="reranking" form={form} onChange={update} options={opts(["none", "cross_encoder", "llm_rerank", "cohere_rerank"])} />
           <NumberField label="Rerank Top N" fieldKey="rerank_top_n" form={form} onChange={update} min={1} max={20} />
           <SelectField label="Freshness Preference" fieldKey="kb_freshness_preference" form={form} onChange={update} options={opts(["prefer_recent", "prefer_authoritative", "no_preference"])} />
+        </div>
+      </ConfigSection>
+
+      {/* Section: Advanced Model */}
+      <ConfigSection title="Advanced Model Settings" description="Stop sequences, JSON schema output, and other advanced parameters" defaultOpen={false}>
+        <div className="space-y-4">
+          <Field label="Stop Sequences" fieldKey="stop_sequences" form={form} onChange={update} description="Comma-separated sequences that cause the model to stop generating">
+            <Input
+              className="h-9 text-xs"
+              value={Array.isArray(form.stop_sequences) ? (form.stop_sequences as string[]).join(", ") : ""}
+              onChange={(e) =>
+                update(
+                  "stop_sequences",
+                  e.target.value ? e.target.value.split(",").map((s) => s.trim()).filter(Boolean) : []
+                )
+              }
+              placeholder='e.g., ###, END, STOP'
+            />
+          </Field>
+          <Field label="JSON Schema (Structured Output)" fieldKey="json_schema" form={form} onChange={update} description="Paste a JSON schema to force structured output (OpenAI only)">
+            <Textarea
+              className="text-xs font-mono"
+              value={form.json_schema ? JSON.stringify(form.json_schema, null, 2) : ""}
+              onChange={(e) => {
+                try {
+                  const parsed = e.target.value.trim() ? JSON.parse(e.target.value) : null;
+                  update("json_schema", parsed);
+                } catch {
+                  // Allow invalid JSON while typing
+                }
+              }}
+              rows={4}
+              placeholder='{"name": "response", "schema": {"type": "object", ...}}'
+            />
+          </Field>
         </div>
       </ConfigSection>
 
