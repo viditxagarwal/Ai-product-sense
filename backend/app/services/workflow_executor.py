@@ -352,6 +352,15 @@ async def _direct_llm_call(
             "total_cost_usd": round(streaming_ctx.total_cost_usd, 6),
         })
 
+        # Save execution trace message (for inspector CTA in chat)
+        supabase.table("thread_messages").insert({
+            "thread_id": thread_id,
+            "role": "assistant",
+            "content": "",
+            "message_type": "execution_trace",
+            "metadata": {"run_id": run_id},
+        }).execute()
+
         # Save assistant message
         supabase.table("thread_messages").insert({
             "thread_id": thread_id,
@@ -881,6 +890,15 @@ async def _execute_workflow_graph(
             "total_llm_calls": total_llm_calls,
             "total_tool_calls": total_tool_calls,
         })
+
+        # Save execution trace message (for inspector CTA in chat)
+        supabase.table("thread_messages").insert({
+            "thread_id": thread_id,
+            "role": "assistant",
+            "content": "",
+            "message_type": "execution_trace",
+            "metadata": {"run_id": run_id},
+        }).execute()
 
         if last_output:
             supabase.table("thread_messages").insert({

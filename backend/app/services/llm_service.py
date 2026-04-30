@@ -75,6 +75,7 @@ class LLMCallResult:
         return {
             "model_id": self.model_id,
             "provider": self.provider,
+            "input_messages": self.input_messages,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "thinking_tokens": self.thinking_tokens,

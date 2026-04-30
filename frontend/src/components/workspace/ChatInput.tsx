@@ -59,7 +59,6 @@ export default function ChatInput() {
     appendStepProgress,
     setStepFileEvent,
     setRunError,
-    clearActiveRun,
   } = useExecutionStore();
 
   const [text, setText] = useState("");
@@ -93,7 +92,6 @@ export default function ChatInput() {
 
       ws.onopen = () => {
         wsLog("info", "WebSocket OPEN");
-        clearActiveRun();
         setStreaming(true);
         setWsDisconnected(false);
         reconnectAttemptRef.current = 0;
@@ -354,19 +352,6 @@ export default function ChatInput() {
           total_cost_usd: data.total_cost_usd as number,
         });
         setStreaming(false);
-
-        // Persist the execution trace message to backend so it survives thread switches
-        if (activeThreadId && completedRunId) {
-          apiPost<ThreadMessage>(`/threads/${activeThreadId}/messages`, {
-            thread_id: activeThreadId,
-            role: "assistant",
-            content: "",
-            message_type: "execution_trace",
-            metadata: { run_id: completedRunId },
-          }).catch(() => {
-            // Non-critical: trace card will still work from local state for current session
-          });
-        }
         break;
       }
 
@@ -378,17 +363,6 @@ export default function ChatInput() {
           status: "failed",
         });
         setRunError(failError);
-
-        // Persist the execution trace message for failed runs too
-        if (activeThreadId && failedRunId) {
-          apiPost<ThreadMessage>(`/threads/${activeThreadId}/messages`, {
-            thread_id: activeThreadId,
-            role: "assistant",
-            content: "",
-            message_type: "execution_trace",
-            metadata: { run_id: failedRunId },
-          }).catch(() => {});
-        }
         break;
       }
 

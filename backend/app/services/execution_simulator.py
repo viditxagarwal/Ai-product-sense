@@ -952,6 +952,15 @@ async def simulate_execution(thread_id: str, user_message: str, send_event):
             "total_cost_usd": round(total_cost, 4),
         })
 
+        # Save execution trace message (for inspector CTA in chat)
+        supabase.table("thread_messages").insert({
+            "thread_id": thread_id,
+            "role": "assistant",
+            "content": "",
+            "message_type": "execution_trace",
+            "metadata": {"run_id": run_id},
+        }).execute()
+
         # ── Create assistant message ──────────────────────────
         assistant_content = _build_assistant_message(
             workflow.data.get("workflow_name", "workflow"),

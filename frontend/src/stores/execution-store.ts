@@ -90,7 +90,13 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
 
   displaySettings: null,
 
-  setActiveRun: (run) => set({ activeRun: run }),
+  setActiveRun: (run) => set((s) => ({
+    activeRun: run,
+    // Reset steps when starting a new run
+    ...(run && run.id && run.id !== s.activeRun?.id
+      ? { activeSteps: [], runError: null, stepProgress: {}, stepFileEvents: {} }
+      : {}),
+  })),
 
   setConfigSnapshot: (snapshot) => set({ configSnapshot: snapshot }),
 
