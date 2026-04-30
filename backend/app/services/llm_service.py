@@ -212,6 +212,7 @@ async def call_llm_streaming(
     on_llm_call_complete=None,
     on_tool_start=None,
     on_tool_complete=None,
+    on_thinking_delta=None,
 ) -> AsyncGenerator[str, None]:
     """Stream tokens from an LLM. Yields text chunks.
 
@@ -227,6 +228,7 @@ async def call_llm_streaming(
         on_llm_call_complete: async fn(call_index, LLMCallResult) called after each LLM API call
         on_tool_start: async fn(tool_name, arguments) called before tool execution
         on_tool_complete: async fn(ToolCallResult) called after tool execution
+        on_thinking_delta: async fn(text) called for each thinking token chunk (Anthropic)
     """
     provider = _resolve_provider(model)
     logger.info("[llm] Resolved provider=%s for model=%s", provider, model)
@@ -251,7 +253,7 @@ async def call_llm_streaming(
     if provider == "anthropic":
         async for chunk in _call_anthropic_streaming_enhanced(
             api_key, model, messages, temperature, max_tokens, ctx, system_prompt,
-            on_llm_call_start, on_llm_call_complete,
+            on_llm_call_start, on_llm_call_complete, on_thinking_delta,
         ):
             yield chunk
         return
@@ -496,6 +498,7 @@ async def _call_anthropic_streaming_enhanced(
     temperature: float, max_tokens: int,
     ctx: StreamingContext, system_prompt: str,
     on_llm_call_start=None, on_llm_call_complete=None,
+    on_thinking_delta=None,
 ) -> AsyncGenerator[str, None]:
     """Stream from Anthropic Messages API with full Layer 1 capture."""
     system_text = ""
@@ -599,6 +602,8 @@ async def _call_anthropic_streaming_enhanced(
                         thinking = delta.get("thinking", "")
                         if thinking:
                             thinking_text += thinking
+                            if on_thinking_delta:
+                                await on_thinking_delta(thinking)
 
                 # message_delta — stop_reason + output tokens
                 elif event_type == "message_delta":

@@ -30,6 +30,11 @@ interface ExecutionStore {
   // Configuration snapshot from execution_start event
   configSnapshot: Record<string, string> | null;
 
+  // Progressive streaming text (ChatGPT/Claude-style)
+  streamingText: string;
+  streamingThinkingText: string;
+  isThinking: boolean;
+
   // Step-level streaming data
   stepProgress: Record<string, StepProgress>; // stepId -> progress texts
   stepFileEvents: Record<string, StepFileEvent>; // stepId -> file event
@@ -53,6 +58,10 @@ interface ExecutionStore {
   setConfigSnapshot: (snapshot: Record<string, string> | null) => void;
   setStreaming: (streaming: boolean) => void;
   setRunError: (error: string | null) => void;
+  appendStreamingText: (text: string) => void;
+  appendStreamingThinkingText: (text: string) => void;
+  setIsThinking: (thinking: boolean) => void;
+  clearStreamingText: () => void;
   clearActiveRun: () => void;
 
   // Actions — inspector (REST)
@@ -79,6 +88,10 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
   runError: null,
   configSnapshot: null,
 
+  streamingText: "",
+  streamingThinkingText: "",
+  isThinking: false,
+
   stepProgress: {},
   stepFileEvents: {},
 
@@ -92,9 +105,10 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
 
   setActiveRun: (run) => set((s) => ({
     activeRun: run,
-    // Reset steps when starting a new run
+    // Reset steps and streaming text when starting a new run
     ...(run && run.id && run.id !== s.activeRun?.id
-      ? { activeSteps: [], runError: null, stepProgress: {}, stepFileEvents: {} }
+      ? { activeSteps: [], runError: null, stepProgress: {}, stepFileEvents: {},
+          streamingText: "", streamingThinkingText: "", isThinking: false }
       : {}),
   })),
 
@@ -127,6 +141,17 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
 
   setRunError: (error) => set({ runError: error }),
 
+  appendStreamingText: (text) =>
+    set((s) => ({ streamingText: s.streamingText + text, isThinking: false })),
+
+  appendStreamingThinkingText: (text) =>
+    set((s) => ({ streamingThinkingText: s.streamingThinkingText + text, isThinking: true })),
+
+  setIsThinking: (thinking) => set({ isThinking: thinking }),
+
+  clearStreamingText: () =>
+    set({ streamingText: "", streamingThinkingText: "", isThinking: false }),
+
   clearActiveRun: () =>
     set({
       activeRun: null,
@@ -134,6 +159,9 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
       isStreaming: false,
       runError: null,
       configSnapshot: null,
+      streamingText: "",
+      streamingThinkingText: "",
+      isThinking: false,
       stepProgress: {},
       stepFileEvents: {},
     }),

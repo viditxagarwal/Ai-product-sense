@@ -59,6 +59,9 @@ export default function ChatInput() {
     appendStepProgress,
     setStepFileEvent,
     setRunError,
+    appendStreamingText,
+    appendStreamingThinkingText,
+    clearStreamingText,
   } = useExecutionStore();
 
   const [text, setText] = useState("");
@@ -296,6 +299,23 @@ export default function ChatInput() {
         break;
       }
 
+      // ── Progressive streaming (ChatGPT/Claude-style) ────
+      case "text_delta": {
+        const content = data.content as string;
+        if (content) {
+          appendStreamingText(content);
+        }
+        break;
+      }
+
+      case "thinking_delta": {
+        const content = data.content as string;
+        if (content) {
+          appendStreamingThinkingText(content);
+        }
+        break;
+      }
+
       case "step_completed": {
         const stepId = data.step_id as string;
         updateStep(stepId, {
@@ -372,6 +392,7 @@ export default function ChatInput() {
         // Safety net: assistant_message is always the last event from the backend,
         // so ensure streaming is stopped even if run_completed was missed
         setStreaming(false);
+        clearStreamingText();
 
         const content = data.content as string;
         if (content && activeThreadId) {

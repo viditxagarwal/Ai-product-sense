@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { MessageCircle, ChevronRight } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useThreadStore } from "@/stores/thread-store";
+import { useExecutionStore } from "@/stores/execution-store";
 import { useDomainStore } from "@/stores/domain-store";
 import ConfigGate from "./ConfigGate";
 import ConfigBar from "./ConfigBar";
@@ -11,12 +12,14 @@ import InstructionsBar from "./InstructionsBar";
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
 import StreamingOverlay from "./StreamingOverlay";
+import StreamingChatBubble from "./StreamingChatBubble";
 
 export default function CenterPanel() {
   const { isConfigGateOpen, activeThreadId, activeDomainId } = useWorkspaceStore();
   const { activeThread, messages, messagesLoading, fetchThread, fetchMessages } =
     useThreadStore();
   const { domains } = useDomainStore();
+  const { streamingText } = useExecutionStore();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const activeDomain = domains.find((d) => d.id === activeDomainId);
@@ -29,10 +32,10 @@ export default function CenterPanel() {
     }
   }, [activeThreadId, fetchThread, fetchMessages]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages or streaming text
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
+  }, [messages.length, streamingText]);
 
   // Show ConfigGate when creating a new thread
   if (isConfigGateOpen && !activeThreadId) {
@@ -107,6 +110,7 @@ export default function CenterPanel() {
             {messages.map((msg) => (
               <ChatMessage key={msg.id} message={msg} />
             ))}
+            <StreamingChatBubble />
             <div ref={bottomRef} />
           </div>
         )}

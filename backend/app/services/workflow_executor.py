@@ -273,6 +273,9 @@ async def _direct_llm_call(
     streaming_ctx = StreamingContext()
 
     try:
+        async def _on_thinking_delta_direct(text):
+            await send_event({"type": "thinking_delta", "content": text})
+
         async for chunk in call_llm_streaming(
             user_id=user_id,
             model=model,
@@ -280,8 +283,10 @@ async def _direct_llm_call(
             temperature=temperature,
             max_tokens=max_tokens,
             streaming_ctx=streaming_ctx,
+            on_thinking_delta=_on_thinking_delta_direct,
         ):
             full_response += chunk
+            await send_event({"type": "text_delta", "content": chunk})
             await emitter.step_progress(step_id, chunk)
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -781,6 +786,9 @@ async def _execute_workflow_graph(
                     parent_event_id=node_event_id,
                 )
 
+            async def _on_thinking_delta_node(text):
+                await send_event({"type": "thinking_delta", "content": text})
+
             try:
                 async for chunk in call_llm_streaming(
                     user_id=user_id,
@@ -795,8 +803,10 @@ async def _execute_workflow_graph(
                     on_llm_call_complete=_on_llm_call_complete,
                     on_tool_start=_on_tool_start,
                     on_tool_complete=_on_tool_complete,
+                    on_thinking_delta=_on_thinking_delta_node,
                 ):
                     step_output += chunk
+                    await send_event({"type": "text_delta", "content": chunk})
                     await emitter.step_progress(step_id, chunk)
             except RuntimeError as e:
                 error_msg = str(e)
