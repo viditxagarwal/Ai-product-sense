@@ -273,8 +273,13 @@ async def _direct_llm_call(
     streaming_ctx = StreamingContext()
 
     try:
+        # Respect streaming_mode from configuration
+        config = ctx.get("config") or {}
+        streaming_mode = config.get("streaming_mode", "chunk_by_section")
+
         async def _on_thinking_delta_direct(text):
-            await send_event({"type": "thinking_delta", "content": text})
+            if streaming_mode == "token_by_token":
+                await send_event({"type": "thinking_delta", "content": text})
 
         async for chunk in call_llm_streaming(
             user_id=user_id,
@@ -286,7 +291,8 @@ async def _direct_llm_call(
             on_thinking_delta=_on_thinking_delta_direct,
         ):
             full_response += chunk
-            await send_event({"type": "text_delta", "content": chunk})
+            if streaming_mode == "token_by_token":
+                await send_event({"type": "text_delta", "content": chunk})
             await emitter.step_progress(step_id, chunk)
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -786,8 +792,13 @@ async def _execute_workflow_graph(
                     parent_event_id=node_event_id,
                 )
 
+            # Respect streaming_mode from configuration
+            graph_config = ctx.get("config") or {}
+            graph_streaming_mode = graph_config.get("streaming_mode", "chunk_by_section")
+
             async def _on_thinking_delta_node(text):
-                await send_event({"type": "thinking_delta", "content": text})
+                if graph_streaming_mode == "token_by_token":
+                    await send_event({"type": "thinking_delta", "content": text})
 
             try:
                 async for chunk in call_llm_streaming(
@@ -806,7 +817,8 @@ async def _execute_workflow_graph(
                     on_thinking_delta=_on_thinking_delta_node,
                 ):
                     step_output += chunk
-                    await send_event({"type": "text_delta", "content": chunk})
+                    if graph_streaming_mode == "token_by_token":
+                        await send_event({"type": "text_delta", "content": chunk})
                     await emitter.step_progress(step_id, chunk)
             except RuntimeError as e:
                 error_msg = str(e)

@@ -4,24 +4,25 @@ import { useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import { Brain, Loader2 } from "lucide-react";
 import { useExecutionStore } from "@/stores/execution-store";
-import { cn } from "@/lib/utils";
 
+/**
+ * Progressive streaming chat bubble — only renders when the backend
+ * sends text_delta / thinking_delta events, which only happens when
+ * the configuration's streaming_mode is "token_by_token".
+ */
 export default function StreamingChatBubble() {
-  const { streamingText, streamingThinkingText, isThinking, isStreaming } =
+  const { streamingText, streamingThinkingText, isThinking } =
     useExecutionStore();
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll as content grows
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [streamingText, streamingThinkingText]);
 
-  // Don't render if not streaming or no content yet
-  if (!isStreaming && !streamingText) return null;
-  if (!streamingText && !streamingThinkingText && !isStreaming) return null;
-
+  // Only render when there is actual streaming content from text_delta/thinking_delta
   const hasThinking = streamingThinkingText.length > 0;
   const hasText = streamingText.length > 0;
+  if (!hasThinking && !hasText) return null;
 
   return (
     <div className="flex px-4 py-2 justify-start">
@@ -45,23 +46,12 @@ export default function StreamingChatBubble() {
         )}
 
         {/* Main streaming text */}
-        {hasText ? (
+        {hasText && (
           <div className="prose prose-sm max-w-none prose-p:my-1 prose-li:my-0 prose-headings:mb-1 prose-headings:mt-2">
             <ReactMarkdown>{streamingText}</ReactMarkdown>
             <span className="inline-block w-1.5 h-4 bg-slate-400 animate-pulse ml-0.5 align-text-bottom" />
           </div>
-        ) : isStreaming ? (
-          <div className="flex items-center gap-2">
-            {!hasThinking && (
-              <>
-                <Loader2 className="size-3.5 animate-spin text-slate-400" />
-                <span className="text-xs text-slate-400">
-                  {hasThinking ? "Generating response..." : "Processing..."}
-                </span>
-              </>
-            )}
-          </div>
-        ) : null}
+        )}
 
         <div ref={bottomRef} />
       </div>
