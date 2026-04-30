@@ -210,7 +210,9 @@ export default function StreamingOverlay() {
     return () => clearInterval(id);
   }, [isStreaming, activeRun?.created_at]);
 
-  if (!isStreaming) return null;
+  // Don't show overlay if not streaming or if the run already completed/failed
+  const runDone = activeRun?.status === "completed" || activeRun?.status === "failed" || activeRun?.status === "cancelled";
+  if (!isStreaming || runDone) return null;
 
   // Derived counters
   const totalTokens = activeSteps.reduce(

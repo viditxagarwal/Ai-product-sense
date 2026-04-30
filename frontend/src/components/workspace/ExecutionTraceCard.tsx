@@ -56,14 +56,17 @@ export default function ExecutionTraceCard({ runId }: Props) {
   }, [runId, activeRun?.id, activeSteps.length]);
 
   // Choose data source: historical or live
+  // If runId matches the currently active run, use live data (not historical fetch)
+  const isCurrentRun = isHistorical && activeRun?.id === runId;
   const run = isHistorical
-    ? (activeRun?.id === runId ? activeRun : histRun)
+    ? (isCurrentRun ? activeRun : histRun)
     : activeRun;
   const steps = isHistorical
-    ? (activeRun?.id === runId ? activeSteps : histSteps)
+    ? (isCurrentRun ? activeSteps : histSteps)
     : activeSteps;
-  const streaming = isHistorical ? false : isStreaming;
-  const error = isHistorical ? null : runError;
+  // Use live streaming state for the current active run, false for truly historical runs
+  const streaming = isCurrentRun ? isStreaming : (isHistorical ? false : isStreaming);
+  const error = isCurrentRun ? runError : (isHistorical ? null : runError);
 
   const status = run?.status ?? (streaming ? "running" : "pending");
   const isComplete = status === "completed";

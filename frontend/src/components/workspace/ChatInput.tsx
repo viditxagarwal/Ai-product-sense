@@ -363,11 +363,16 @@ export default function ChatInput() {
           status: "failed",
         });
         setRunError(failError);
+        setStreaming(false);
         break;
       }
 
       // ── Assistant message ────────────────────────────
       case "assistant_message": {
+        // Safety net: assistant_message is always the last event from the backend,
+        // so ensure streaming is stopped even if run_completed was missed
+        setStreaming(false);
+
         const content = data.content as string;
         if (content && activeThreadId) {
           const msg: ThreadMessage = {
