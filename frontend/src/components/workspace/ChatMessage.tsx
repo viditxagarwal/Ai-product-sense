@@ -42,9 +42,10 @@ export default function ChatMessage({ message }: ChatMessageProps) {
 
   // Execution trace messages
   if (message.message_type === "execution_trace") {
+    const traceRunId = (message.metadata as Record<string, unknown>)?.run_id as string | undefined;
     return (
       <div className="px-4 py-1">
-        <ExecutionTraceCard />
+        <ExecutionTraceCard runId={traceRunId} />
       </div>
     );
   }

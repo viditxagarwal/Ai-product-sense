@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity,
   Loader2,
@@ -12,27 +12,76 @@ import {
 } from "lucide-react";
 import { useExecutionStore } from "@/stores/execution-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
+import { apiGet } from "@/lib/api";
 import TraceStep from "./TraceStep";
 import { cn } from "@/lib/utils";
+import type { ExecutionRun, ExecutionStep } from "@/types";
 
-export default function ExecutionTraceCard() {
+interface Props {
+  /** When provided, renders in "historical" mode using API data instead of live store. */
+  runId?: string | null;
+}
+
+export default function ExecutionTraceCard({ runId }: Props) {
   const { activeRun, activeSteps, isStreaming, runError, configSnapshot } =
     useExecutionStore();
   const { setSelectedRunId, setActiveRightTab } = useWorkspaceStore();
 
-  const status = activeRun?.status ?? (isStreaming ? "running" : "pending");
+  // Historical mode: fetch run + steps from API when runId is provided
+  const [histRun, setHistRun] = useState<Partial<ExecutionRun> | null>(null);
+  const [histSteps, setHistSteps] = useState<ExecutionStep[]>([]);
+  const [histLoading, setHistLoading] = useState(false);
+
+  const isHistorical = !!runId;
+
+  useEffect(() => {
+    if (!runId) return;
+    // Don't fetch if this run is currently the active run
+    if (activeRun?.id === runId && activeSteps.length > 0) return;
+
+    let cancelled = false;
+    setHistLoading(true);
+
+    Promise.all([
+      apiGet<ExecutionRun>(`/runs/${runId}`).catch(() => null),
+      apiGet<ExecutionStep[]>(`/runs/${runId}/steps`).catch(() => []),
+    ]).then(([run, steps]) => {
+      if (cancelled) return;
+      setHistRun(run);
+      setHistSteps(steps as ExecutionStep[]);
+      setHistLoading(false);
+    });
+
+    return () => { cancelled = true; };
+  }, [runId, activeRun?.id, activeSteps.length]);
+
+  // Choose data source: historical or live
+  const run = isHistorical
+    ? (activeRun?.id === runId ? activeRun : histRun)
+    : activeRun;
+  const steps = isHistorical
+    ? (activeRun?.id === runId ? activeSteps : histSteps)
+    : activeSteps;
+  const streaming = isHistorical ? false : isStreaming;
+  const error = isHistorical ? null : runError;
+
+  const status = run?.status ?? (streaming ? "running" : "pending");
   const isComplete = status === "completed";
   const isFailed = status === "failed" || status === "cancelled";
 
-  // Config-driven display mode
-  const displayMode = configSnapshot?.harness_display_mode ?? "sequential_visible";
-  const stepsMode = configSnapshot?.intermediate_steps_in_chat ?? "status_pills";
+  // Config-driven display mode (only for live mode)
+  const displayMode = !isHistorical
+    ? (configSnapshot?.harness_display_mode ?? "sequential_visible")
+    : "sequential_visible";
+  const stepsMode = !isHistorical
+    ? (configSnapshot?.intermediate_steps_in_chat ?? "status_pills")
+    : "status_pills";
 
-  // Collapsed state (for collapsible modes)
+  // Collapsed state
   const [collapsed, setCollapsed] = useState(displayMode === "collapsed_summary");
 
   // If mode is "final_only", show only final result — no trace at all while running
-  if (displayMode === "final_only" && isStreaming) {
+  if (displayMode === "final_only" && streaming) {
     return (
       <div className="my-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
         <Loader2 className="size-3.5 animate-spin text-blue-500" />
@@ -41,22 +90,44 @@ export default function ExecutionTraceCard() {
     );
   }
 
+  // Historical loading state
+  if (isHistorical && histLoading) {
+    return (
+      <div className="my-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <Loader2 className="size-3.5 animate-spin text-slate-400" />
+        <span className="text-xs text-slate-400">Loading execution trace...</span>
+      </div>
+    );
+  }
+
+  // No data available
+  if (isHistorical && !run && !histLoading) {
+    return (
+      <div className="my-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <Activity className="size-3.5 text-slate-300" />
+        <span className="text-xs text-slate-400">Execution trace unavailable</span>
+      </div>
+    );
+  }
+
+  const effectiveRunId = runId || activeRun?.id;
+
   function handleInspect() {
-    if (activeRun?.id) {
-      setSelectedRunId(activeRun.id);
+    if (effectiveRunId) {
+      setSelectedRunId(effectiveRunId);
       setActiveRightTab("inspector");
     }
   }
 
   // Render steps based on intermediate_steps_in_chat mode
   function renderSteps() {
-    if (stepsMode === "none" && isStreaming) {
+    if (stepsMode === "none" && streaming) {
       return null;
     }
 
     if (stepsMode === "progress_bar") {
-      const total = activeRun?.step_count ?? activeSteps.length;
-      const completed = activeSteps.filter(
+      const total = run?.step_count ?? steps.length;
+      const completed = steps.filter(
         (s) => s.status === "completed" || s.status === "failed"
       ).length;
       const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
@@ -77,10 +148,9 @@ export default function ExecutionTraceCard() {
               style={{ width: `${pct}%` }}
             />
           </div>
-          {/* Show the currently running step name */}
-          {isStreaming && activeSteps.length > 0 && (
+          {streaming && steps.length > 0 && (
             <p className="mt-1 truncate text-[10px] text-slate-400 italic">
-              {activeSteps[activeSteps.length - 1].node_name}...
+              {steps[steps.length - 1].node_name}...
             </p>
           )}
         </div>
@@ -90,7 +160,7 @@ export default function ExecutionTraceCard() {
     if (stepsMode === "status_pills") {
       return (
         <div className="flex flex-wrap gap-1 px-3 py-2">
-          {activeSteps.map((step) => (
+          {steps.map((step) => (
             <span
               key={step.id}
               className={cn(
@@ -121,7 +191,7 @@ export default function ExecutionTraceCard() {
     // "full_output" — default detailed view
     return (
       <div className="divide-y divide-slate-100">
-        {activeSteps.map((step) => (
+        {steps.map((step) => (
           <TraceStep key={step.id} step={step} />
         ))}
       </div>
@@ -133,7 +203,7 @@ export default function ExecutionTraceCard() {
 
   return (
     <div className="my-2 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm transition-all duration-300">
-      {/* ── Header ──────────────────────────────────────── */}
+      {/* Header */}
       <button
         onClick={() => isCollapsible && setCollapsed(!collapsed)}
         className={cn(
@@ -141,7 +211,6 @@ export default function ExecutionTraceCard() {
           isCollapsible && "cursor-pointer hover:bg-slate-100/50"
         )}
       >
-        {/* Collapse toggle */}
         {isCollapsible &&
           (collapsed ? (
             <ChevronRight className="size-3 text-slate-400" />
@@ -149,8 +218,7 @@ export default function ExecutionTraceCard() {
             <ChevronDown className="size-3 text-slate-400" />
           ))}
 
-        {/* Status indicator */}
-        {isStreaming ? (
+        {streaming ? (
           <Loader2 className="size-3.5 animate-spin text-blue-500" />
         ) : isComplete ? (
           <CheckCircle2 className="size-3.5 text-emerald-500" />
@@ -164,35 +232,31 @@ export default function ExecutionTraceCard() {
           Execution Trace
         </span>
 
-        {/* Streaming indicator */}
-        {isStreaming && (
+        {streaming && (
           <span className="text-[10px] text-blue-500">Running...</span>
         )}
 
-        {/* Summary stats (when complete) */}
-        {isComplete && activeRun && (
+        {isComplete && run && (
           <span className="text-[10px] text-slate-400">
-            {activeRun.step_count ?? activeSteps.length} steps
-            {activeRun.total_duration_ms
-              ? ` · ${(activeRun.total_duration_ms / 1000).toFixed(1)}s`
+            {run.step_count ?? steps.length} steps
+            {run.total_duration_ms
+              ? ` · ${(run.total_duration_ms / 1000).toFixed(1)}s`
               : ""}
-            {activeRun.total_cost_usd
-              ? ` · $${activeRun.total_cost_usd.toFixed(2)}`
+            {run.total_cost_usd
+              ? ` · $${run.total_cost_usd.toFixed(2)}`
               : ""}
           </span>
         )}
 
-        {/* Failed error */}
-        {isFailed && runError && (
+        {isFailed && error && (
           <span className="truncate text-[10px] font-medium text-red-500">
-            Error: {runError}
+            Error: {error}
           </span>
         )}
 
         <div className="flex-1" />
 
-        {/* Inspect link — only after completion */}
-        {(isComplete || isFailed) && activeRun?.id && (
+        {(isComplete || isFailed) && effectiveRunId && (
           <span
             onClick={(e) => {
               e.stopPropagation();
@@ -206,11 +270,11 @@ export default function ExecutionTraceCard() {
         )}
       </button>
 
-      {/* ── Steps ───────────────────────────────────────── */}
+      {/* Steps */}
       {!collapsed && (
         <>
           {renderSteps()}
-          {activeSteps.length === 0 && isStreaming && (
+          {steps.length === 0 && streaming && (
             <div className="flex items-center gap-2 px-3 py-3">
               <Loader2 className="size-3.5 animate-spin text-slate-300" />
               <span className="text-xs text-slate-400">

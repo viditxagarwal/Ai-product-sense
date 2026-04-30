@@ -16,6 +16,7 @@ interface ThreadStore {
   archiveThread: (id: string) => Promise<void>;
   fetchMessages: (threadId: string, page?: number) => Promise<void>;
   addLocalMessage: (msg: ThreadMessage) => void;
+  updateLocalMessage: (id: string, updates: Partial<ThreadMessage>) => void;
   clearThread: () => void;
 }
 
@@ -59,6 +60,12 @@ export const useThreadStore = create<ThreadStore>((set) => ({
 
   addLocalMessage: (msg) => {
     set((s) => ({ messages: [...s.messages, msg] }));
+  },
+
+  updateLocalMessage: (id, updates) => {
+    set((s) => ({
+      messages: s.messages.map((m) => (m.id === id ? { ...m, ...updates } : m)),
+    }));
   },
 
   clearThread: () => set({ activeThread: null, messages: [] }),

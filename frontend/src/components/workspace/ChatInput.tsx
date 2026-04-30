@@ -49,7 +49,7 @@ export function clearWsDebugLog() {
 export default function ChatInput() {
   const { activeThreadId, selectedStepId, setSelectedStepId } = useWorkspaceStore();
   const { inspectorSteps } = useExecutionStore();
-  const { addLocalMessage } = useThreadStore();
+  const { addLocalMessage, updateLocalMessage } = useThreadStore();
   const {
     isStreaming,
     setStreaming,
@@ -71,6 +71,7 @@ export default function ChatInput() {
   const lastStepIdRef = useRef<string | null>(null);
   const reconnectAttemptRef = useRef(0);
   const pendingMessageRef = useRef<string | null>(null);
+  const tracePlaceholderIdRef = useRef<string | null>(null);
 
   const canSend =
     text.trim().length > 0 && !isStreaming && !sending && activeThreadId;
@@ -208,8 +209,9 @@ export default function ChatInput() {
       addLocalMessage(userMsg);
 
       // Add a placeholder execution trace message
+      const traceId = `trace-${Date.now()}`;
       const tracePlaceholder: ThreadMessage = {
-        id: `trace-${Date.now()}`,
+        id: traceId,
         thread_id: activeThreadId,
         role: "assistant",
         content: "",
@@ -217,6 +219,7 @@ export default function ChatInput() {
         metadata: null,
         created_at: new Date().toISOString(),
       };
+      tracePlaceholderIdRef.current = traceId;
       addLocalMessage(tracePlaceholder);
 
       // Store message for potential reconnection, then connect WS
@@ -236,11 +239,18 @@ export default function ChatInput() {
     switch (type) {
       // ── Run lifecycle ────────────────────────────────
       case "run_started": {
+        const runId = data.run_id as string;
         setActiveRun({
-          id: data.run_id as string,
+          id: runId,
           status: "running",
           step_count: (data.step_count as number) || 0,
         });
+        // Attach run_id to the trace placeholder so it can load historical data
+        if (tracePlaceholderIdRef.current && runId) {
+          updateLocalMessage(tracePlaceholderIdRef.current, {
+            metadata: { run_id: runId },
+          });
+        }
         // Store config snapshot for config-driven rendering
         if (data.config_snapshot) {
           useExecutionStore.getState().setConfigSnapshot(
@@ -335,26 +345,50 @@ export default function ChatInput() {
 
       // ── Run completion ───────────────────────────────
       case "run_completed": {
+        const completedRunId = data.run_id as string;
         setActiveRun({
-          id: data.run_id as string,
+          id: completedRunId,
           status: "completed",
           total_duration_ms: data.total_duration_ms as number,
           total_tokens: data.total_tokens as number,
           total_cost_usd: data.total_cost_usd as number,
         });
         setStreaming(false);
+
+        // Persist the execution trace message to backend so it survives thread switches
+        if (activeThreadId && completedRunId) {
+          apiPost<ThreadMessage>(`/threads/${activeThreadId}/messages`, {
+            thread_id: activeThreadId,
+            role: "assistant",
+            content: "",
+            message_type: "execution_trace",
+            metadata: { run_id: completedRunId },
+          }).catch(() => {
+            // Non-critical: trace card will still work from local state for current session
+          });
+        }
         break;
       }
 
       case "run_failed": {
         const failError = (data.error as string) || "Execution failed";
+        const failedRunId = (data.run_id as string) || "";
         setActiveRun({
-          id: (data.run_id as string) || "",
+          id: failedRunId,
           status: "failed",
         });
         setRunError(failError);
-        // Don't close WS yet — executor may send fallback events after this
-        // WS will close naturally when the server is done
+
+        // Persist the execution trace message for failed runs too
+        if (activeThreadId && failedRunId) {
+          apiPost<ThreadMessage>(`/threads/${activeThreadId}/messages`, {
+            thread_id: activeThreadId,
+            role: "assistant",
+            content: "",
+            message_type: "execution_trace",
+            metadata: { run_id: failedRunId },
+          }).catch(() => {});
+        }
         break;
       }
 
