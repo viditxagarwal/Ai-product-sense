@@ -65,10 +65,13 @@ export default function ExecutionTraceCard({ runId }: Props) {
     ? (isCurrentRun ? activeSteps : histSteps)
     : activeSteps;
   // Use live streaming state for the current active run, false for truly historical runs
-  const streaming = isCurrentRun ? isStreaming : (isHistorical ? false : isStreaming);
+  // But always respect run.status — if the run is done, streaming is done
+  const runStatus = run?.status;
+  const runIsDone = runStatus === "completed" || runStatus === "failed" || runStatus === "cancelled";
+  const streaming = runIsDone ? false : (isCurrentRun ? isStreaming : (isHistorical ? false : isStreaming));
   const error = isCurrentRun ? runError : (isHistorical ? null : runError);
 
-  const status = run?.status ?? (streaming ? "running" : "pending");
+  const status = runStatus ?? (streaming ? "running" : "pending");
   const isComplete = status === "completed";
   const isFailed = status === "failed" || status === "cancelled";
 

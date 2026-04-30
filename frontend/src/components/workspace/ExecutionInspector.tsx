@@ -132,13 +132,26 @@ export default function ExecutionInspector() {
   };
 
   // Group events by node_id for passing to InspectorNode
-  const eventsByNode: Record<string, typeof inspectorEvents> = {};
+  const eventsByNodeId: Record<string, typeof inspectorEvents> = {};
   for (const evt of inspectorEvents) {
     const nodeId = (evt.data as Record<string, unknown>).node_id as string;
     if (nodeId) {
-      if (!eventsByNode[nodeId]) eventsByNode[nodeId] = [];
-      eventsByNode[nodeId].push(evt);
+      if (!eventsByNodeId[nodeId]) eventsByNodeId[nodeId] = [];
+      eventsByNodeId[nodeId].push(evt);
     }
+  }
+
+  // Build step → events mapping using node_id stored in step's input_payload
+  function getEventsForStep(step: typeof inspectorSteps[number]) {
+    const stepNodeId = (step.input_payload as Record<string, unknown>)?.node_id as string | undefined;
+    if (stepNodeId && eventsByNodeId[stepNodeId]) {
+      return eventsByNodeId[stepNodeId];
+    }
+    // Fallback: if only 1 step, give it all events
+    if (inspectorSteps.length === 1) {
+      return inspectorEvents;
+    }
+    return [];
   }
 
   return (
@@ -230,9 +243,7 @@ export default function ExecutionInspector() {
                 }}
                 step={step}
                 isSelected={step.id === selectedStepId}
-                events={eventsByNode[step.id] || inspectorEvents.filter(
-                  e => (e.data as Record<string, unknown>).step_id === step.id
-                )}
+                events={getEventsForStep(step)}
                 displaySettings={displaySettings}
               />
             ))}

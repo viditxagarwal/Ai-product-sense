@@ -248,6 +248,7 @@ async def _direct_llm_call(
         "node_type": "direct_llm",
         "node_name": f"Direct Chat ({model})",
         "status": "running",
+        "input_payload": {"node_id": "direct"},
     }).execute()
     step_id = step.data[0]["id"]
 
@@ -553,6 +554,7 @@ async def _execute_workflow_graph(
                     "node_name": node_name,
                     "status": "completed",
                     "duration_ms": 0,
+                    "input_payload": {"node_id": node_id},
                     "output_payload": {"status": f"{(component_type or node_type)}_passthrough"},
                 }).execute()
 
@@ -591,6 +593,7 @@ async def _execute_workflow_graph(
                 "node_type": component_type or node_type,
                 "node_name": node_name,
                 "status": "running",
+                "input_payload": {"node_id": node_id},
             }).execute()
             step_id = step.data[0]["id"]
 
