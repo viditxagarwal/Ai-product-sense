@@ -10,11 +10,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Search,
   Loader2,
-  Clock,
-  Cpu,
-  DollarSign,
-  Shield,
-  Layers,
   Settings,
   GitBranch,
   BarChart3,

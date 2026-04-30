@@ -13,8 +13,6 @@ import {
   Zap,
   Brain,
   AlertTriangle,
-  Copy,
-  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ExecutionEvent, LLMCallData } from "@/types";
