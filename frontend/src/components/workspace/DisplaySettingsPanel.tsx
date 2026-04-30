@@ -97,7 +97,7 @@ export function DisplaySettingsPanel() {
   };
 
   return (
-    <div className="flex flex-col gap-4 p-3 bg-white border border-slate-200 rounded-lg shadow-sm w-72">
+    <div className="flex flex-col gap-4 p-3 bg-white border border-slate-200 rounded-lg shadow-sm w-72 max-h-[60vh] overflow-y-auto">
       {/* Header */}
       <div className="flex items-center gap-2">
         <Settings className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />

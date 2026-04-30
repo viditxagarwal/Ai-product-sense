@@ -223,25 +223,25 @@ const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
                     {(step.duration_ms / 1000).toFixed(1)}s
                   </span>
                 )}
-                {step.tokens_used > 0 && (
+                {(ds?.show_token_counts ?? true) && step.tokens_used > 0 && (
                   <span>
                     <strong className="text-slate-600">Tokens:</strong>{" "}
                     {inputTokens > 0 ? `${inputTokens} in / ${outputTokens} out` : step.tokens_used.toLocaleString()}
                     {thinkingTokens > 0 && ` / ${thinkingTokens} thinking`}
                   </span>
                 )}
-                {step.cost_usd > 0 && (
+                {(ds?.show_costs ?? true) && step.cost_usd > 0 && (
                   <span>
                     <strong className="text-slate-600">Cost:</strong> $
                     {step.cost_usd.toFixed(4)}
                   </span>
                 )}
-                {llmCalls > 0 && (
+                {(ds?.show_inner_llm_calls ?? true) && llmCalls > 0 && (
                   <span className={llmCalls > 2 ? "text-amber-600" : ""}>
                     <strong>{llmCalls}</strong> LLM calls
                   </span>
                 )}
-                {toolCalls > 0 && (
+                {(ds?.show_tool_call_details ?? true) && toolCalls > 0 && (
                   <span>
                     <strong>{toolCalls}</strong> tool calls
                   </span>
@@ -281,7 +281,7 @@ const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
               {(ds?.show_inner_llm_calls ?? true) && llmCallEvents.length > 0 && (
                 <LLMCallTimeline
                   llmEvents={llmCallEvents}
-                  toolEvents={toolCallEvents}
+                  toolEvents={(ds?.show_tool_call_details ?? true) ? toolCallEvents : []}
                   showThinking={ds?.show_thinking ?? true}
                   showRawMessages={ds?.show_raw_messages ?? false}
                 />
@@ -308,16 +308,16 @@ const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
                 </div>
               )}
 
-              {/* Input/Output (C1) */}
-              {step.input_payload !== null && step.input_payload && Object.keys(step.input_payload).length > 0 && (
+              {/* Input/Output (C1) — gated by show_mapping_details */}
+              {(ds?.show_mapping_details ?? true) && step.input_payload !== null && step.input_payload && Object.keys(step.input_payload).length > 0 && (
                 <CollapsibleJson label="Input" data={step.input_payload} />
               )}
-              {output !== null && output && Object.keys(output).length > 0 && (
+              {(ds?.show_mapping_details ?? true) && output !== null && output && Object.keys(output).length > 0 && (
                 <CollapsibleJson label="Output" data={output as Record<string, unknown>} />
               )}
 
-              {/* Routing decision */}
-              {step.routing_decision !== null && step.routing_decision && Object.keys(step.routing_decision).length > 0 && (
+              {/* Routing decision — gated by show_edge_evaluations */}
+              {(ds?.show_edge_evaluations ?? true) && step.routing_decision !== null && step.routing_decision && Object.keys(step.routing_decision).length > 0 && (
                 <div>
                   <h5 className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                     Routing Decision

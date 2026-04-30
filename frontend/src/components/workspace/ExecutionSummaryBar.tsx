@@ -15,6 +15,7 @@ import {
   Database,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useExecutionStore } from "@/stores/execution-store";
 import type { ExecutionSummary } from "@/types";
 
 interface Props {
@@ -61,6 +62,7 @@ function statusColor(status: string): string {
 }
 
 export default function ExecutionSummaryBar({ summary, status }: Props) {
+  const { displaySettings: ds } = useExecutionStore();
   const hasThinking = summary.total_thinking_tokens > 0;
   const hasCacheRead = summary.total_cache_read_tokens > 0;
   const cachePercent = summary.total_input_tokens > 0
@@ -87,29 +89,35 @@ export default function ExecutionSummaryBar({ summary, status }: Props) {
         </span>
 
         {/* A1: Token Badge */}
-        <Badge icon={Cpu} label="tokens" value={formatTokens(summary.total_tokens)} />
+        {(ds?.show_token_counts ?? true) && (
+          <Badge icon={Cpu} label="tokens" value={formatTokens(summary.total_tokens)} />
+        )}
 
         {/* A9: Token Split */}
-        <span className="text-slate-400">
-          {formatTokens(summary.total_input_tokens)} in / {formatTokens(summary.total_output_tokens)} out
-          {hasThinking && ` / ${formatTokens(summary.total_thinking_tokens)} think`}
-        </span>
+        {(ds?.show_token_counts ?? true) && (
+          <span className="text-slate-400">
+            {formatTokens(summary.total_input_tokens)} in / {formatTokens(summary.total_output_tokens)} out
+            {hasThinking && ` / ${formatTokens(summary.total_thinking_tokens)} think`}
+          </span>
+        )}
 
         {/* A2: Cost Badge */}
-        <span className={cn("flex items-center gap-1 rounded px-1.5 py-0.5 font-medium",
-          costColor(summary.total_cost_usd))}>
-          <DollarSign className="size-3" />
-          ${summary.total_cost_usd.toFixed(4)}
-        </span>
+        {(ds?.show_costs ?? true) && (
+          <span className={cn("flex items-center gap-1 rounded px-1.5 py-0.5 font-medium",
+            costColor(summary.total_cost_usd))}>
+            <DollarSign className="size-3" />
+            ${summary.total_cost_usd.toFixed(4)}
+          </span>
+        )}
 
         {/* A5: LLM Call Count */}
-        {summary.total_llm_calls > 0 && (
+        {(ds?.show_inner_llm_calls ?? true) && summary.total_llm_calls > 0 && (
           <Badge icon={Zap} label="LLM calls" value={summary.total_llm_calls}
             warn={summary.total_llm_calls > summary.step_count * 2} />
         )}
 
         {/* A6: Tool Call Count */}
-        {summary.total_tool_calls > 0 && (
+        {(ds?.show_tool_call_details ?? true) && summary.total_tool_calls > 0 && (
           <Badge icon={Wrench} label="tool calls" value={summary.total_tool_calls} />
         )}
 
