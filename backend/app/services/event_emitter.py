@@ -193,3 +193,120 @@ class EventEmitter:
             "retry_attempt": retry_attempt,
             "will_retry": will_retry,
         }, parent_event_id=parent_event_id)
+
+    # ── Tier 2: Edge evaluation events ───────────────────────
+
+    async def edge_evaluated(self, edge_id: str, source_node: str, target_node: str,
+                              condition_method: str, condition_result: bool,
+                              evaluation_details: dict,
+                              parent_event_id: str | None = None) -> str:
+        return await self.emit("edge_evaluated", {
+            "edge_id": edge_id,
+            "source_node": source_node,
+            "target_node": target_node,
+            "condition_method": condition_method,
+            "condition_result": condition_result,
+            "evaluation_details": evaluation_details,
+        }, parent_event_id=parent_event_id)
+
+    async def mapping_applied(self, edge_id: str, source_node: str, target_node: str,
+                               mappings: list[dict],
+                               parent_event_id: str | None = None) -> str:
+        return await self.emit("mapping_applied", {
+            "edge_id": edge_id,
+            "source_node": source_node,
+            "target_node": target_node,
+            "mappings": mappings,
+        }, parent_event_id=parent_event_id)
+
+    # ── Tier 2: Split/merge events ───────────────────────────
+
+    async def split_started(self, node_id: str, branch_count: int,
+                             fan_out_method: str, merge_method: str,
+                             parent_event_id: str | None = None) -> str:
+        return await self.emit("split_started", {
+            "node_id": node_id,
+            "branch_count": branch_count,
+            "fan_out_method": fan_out_method,
+            "merge_method": merge_method,
+        }, parent_event_id=parent_event_id)
+
+    async def split_branch_completed(self, node_id: str, branch_index: int,
+                                      branch_node_id: str, status: str,
+                                      duration_ms: int, tokens: int,
+                                      parent_event_id: str | None = None) -> str:
+        return await self.emit("split_branch_completed", {
+            "node_id": node_id,
+            "branch_index": branch_index,
+            "branch_node_id": branch_node_id,
+            "status": status,
+            "duration_ms": duration_ms,
+            "tokens": tokens,
+        }, parent_event_id=parent_event_id)
+
+    async def split_completed(self, node_id: str, merge_method: str,
+                               merged_output: str, total_branches: int,
+                               completed_branches: int, failed_branches: int,
+                               parent_event_id: str | None = None) -> str:
+        return await self.emit("split_completed", {
+            "node_id": node_id,
+            "merge_method": merge_method,
+            "merged_output": merged_output[:1000],
+            "total_branches": total_branches,
+            "completed_branches": completed_branches,
+            "failed_branches": failed_branches,
+        }, parent_event_id=parent_event_id)
+
+    # ── Tier 2: Human review / gate events ───────────────────
+
+    async def human_review_requested(self, node_id: str, node_label: str,
+                                      review_instructions: str,
+                                      available_actions: dict,
+                                      wait_duration: str | None = None,
+                                      timeout_action: str | None = None,
+                                      parent_event_id: str | None = None) -> str:
+        return await self.emit("human_review_requested", {
+            "node_id": node_id,
+            "node_label": node_label,
+            "review_instructions": review_instructions,
+            "available_actions": available_actions,
+            "wait_duration": wait_duration,
+            "timeout_action": timeout_action,
+        }, parent_event_id=parent_event_id)
+
+    async def human_review_completed(self, node_id: str, action: str,
+                                      reviewer_comment: str = "",
+                                      duration_ms: int = 0,
+                                      parent_event_id: str | None = None) -> str:
+        return await self.emit("human_review_completed", {
+            "node_id": node_id,
+            "action": action,
+            "reviewer_comment": reviewer_comment,
+            "duration_ms": duration_ms,
+        }, parent_event_id=parent_event_id)
+
+    # ── Tier 2: Loop events ──────────────────────────────────
+
+    async def loop_iteration(self, edge_id: str, source_node: str, target_node: str,
+                              iteration: int, max_iterations: int,
+                              exit_condition_met: bool = False,
+                              parent_event_id: str | None = None) -> str:
+        return await self.emit("loop_iteration", {
+            "edge_id": edge_id,
+            "source_node": source_node,
+            "target_node": target_node,
+            "iteration": iteration,
+            "max_iterations": max_iterations,
+            "exit_condition_met": exit_condition_met,
+        }, parent_event_id=parent_event_id)
+
+    async def loop_completed(self, edge_id: str, source_node: str, target_node: str,
+                              total_iterations: int, exit_reason: str,
+                              parent_event_id: str | None = None) -> str:
+        return await self.emit("loop_completed", {
+            "edge_id": edge_id,
+            "source_node": source_node,
+            "target_node": target_node,
+            "total_iterations": total_iterations,
+            "exit_reason": exit_reason,
+        }, parent_event_id=parent_event_id)

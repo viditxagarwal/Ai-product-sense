@@ -17,6 +17,29 @@ router = APIRouter(tags=["Streaming"])
 # Track active simulation tasks so they can be cancelled
 _active_runs: dict[str, asyncio.Task] = {}
 
+# Pending gate reviews: thread_id -> asyncio.Event + result dict
+# Set by gate node in executor, waited on until PM approves/rejects via WS
+_pending_gates: dict[str, dict] = {}
+
+
+def register_gate_wait(thread_id: str) -> tuple[asyncio.Event, dict]:
+    """Register a pending gate review for a thread. Returns (event, result_holder)."""
+    result_holder: dict = {"action": None, "comment": ""}
+    event = asyncio.Event()
+    _pending_gates[thread_id] = {"event": event, "result": result_holder}
+    return event, result_holder
+
+
+def resolve_gate(thread_id: str, action: str, comment: str = "") -> bool:
+    """Resolve a pending gate review. Returns True if there was a gate waiting."""
+    gate = _pending_gates.pop(thread_id, None)
+    if not gate:
+        return False
+    gate["result"]["action"] = action
+    gate["result"]["comment"] = comment
+    gate["event"].set()
+    return True
+
 
 def _verify_thread_access(thread_id: str, token: str) -> bool:
     """Verify the user owns this thread using their JWT."""
@@ -162,6 +185,17 @@ async def thread_stream(websocket: WebSocket, thread_id: str):
                     logger.info("[ws] User cancelled run: thread=%s", thread_id)
                     existing.cancel()
                     await send_event({"type": "run_failed", "run_id": msg.get("run_id", ""), "error": "Cancelled by user"})
+
+            elif msg_type == "gate_review":
+                action = msg.get("action", "")  # approve, reject, edit_and_approve, etc.
+                comment = msg.get("comment", "")
+                logger.info("[ws] Gate review: thread=%s action=%s", thread_id, action)
+                if not action:
+                    await send_event({"type": "error", "message": "gate_review requires 'action' field"})
+                elif resolve_gate(thread_id, action, comment):
+                    await send_event({"type": "gate_review_ack", "action": action})
+                else:
+                    await send_event({"type": "error", "message": "No pending gate review for this thread"})
 
             elif msg_type == "expand_step":
                 step_id = msg.get("step_id")
