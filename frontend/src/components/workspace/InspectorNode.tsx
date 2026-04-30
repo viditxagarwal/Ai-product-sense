@@ -1,5 +1,11 @@
 "use client";
 
+/**
+ * Enhanced InspectorNode (Section C.3)
+ * Shows step details including LLM call timeline, tool call cards,
+ * thinking blocks, config snapshots, and token breakdowns.
+ */
+
 import { forwardRef, useState } from "react";
 import {
   ChevronRight,
@@ -13,25 +19,27 @@ import {
   FilePenLine,
   FileOutput,
   FileEdit,
+  Settings,
+  AlertTriangle,
 } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { cn } from "@/lib/utils";
 import AnnotationInput from "./AnnotationInput";
-import type { ExecutionStep } from "@/types";
+import LLMCallTimeline from "./LLMCallTimeline";
+import type { ExecutionStep, ExecutionEvent, DisplaySettings } from "@/types";
 
 interface InspectorNodeProps {
   step: ExecutionStep;
   isSelected: boolean;
+  events?: ExecutionEvent[];
+  displaySettings?: DisplaySettings | null;
 }
 
-// Node type left bar colors
 const NODE_BAR: Record<string, string> = {
-  // New types (canvas revamp)
   node: "bg-blue-400",
   gate: "bg-amber-400",
   split: "bg-purple-400",
   start: "bg-gray-400",
-  // Old types (backward compat)
   route: "bg-orange-400",
   retriever: "bg-emerald-400",
   calculator: "bg-blue-400",
@@ -78,14 +86,41 @@ function StatusIcon({ status }: { status: ExecutionStep["status"] }) {
 }
 
 const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
-  function InspectorNode({ step, isSelected }, ref) {
+  function InspectorNode({ step, isSelected, events = [], displaySettings }, ref) {
     const [expanded, setExpanded] = useState(false);
+    const [showConfig, setShowConfig] = useState(false);
     const { setSelectedStepId } = useWorkspaceStore();
 
     const barColor = NODE_BAR[step.node_type] || "bg-slate-400";
     const fileOp = step.file_operation_type !== "none" ? FILE_OP_CONFIG[step.file_operation_type] : null;
     const output = step.output_payload as Record<string, unknown> | null;
-    const resultSummary = output?.result_summary as string | undefined;
+
+    // Extract enhanced data from output_payload
+    const inputTokens = (output?.input_tokens as number) || 0;
+    const outputTokens = (output?.output_tokens as number) || 0;
+    const thinkingTokens = (output?.thinking_tokens as number) || 0;
+    const llmCalls = (output?.llm_calls as number) || 0;
+    const toolCalls = (output?.tool_calls as number) || 0;
+    const modelUsed = (output?.model as string) || "";
+
+    // Filter events by type
+    const llmCallEvents = events.filter((e) => e.event_type === "llm_call_completed");
+    const toolCallEvents = events.filter((e) => e.event_type === "tool_completed");
+    const errorEvents = events.filter((e) => e.event_type === "error");
+    const nodeStartEvent = events.find((e) => e.event_type === "node_started");
+    const componentConfig = nodeStartEvent
+      ? (nodeStartEvent.data as Record<string, unknown>).component_config as Record<string, unknown>
+      : null;
+
+    // Check for stop_reason warnings
+    const hasMaxTokensWarning = llmCallEvents.some(
+      (e) => (e.data as Record<string, unknown>).stop_reason === "max_tokens"
+    );
+    const hasContentFilterWarning = llmCallEvents.some(
+      (e) => (e.data as Record<string, unknown>).stop_reason === "content_filter"
+    );
+
+    const ds = displaySettings;
 
     function handleClick() {
       setExpanded(!expanded);
@@ -105,7 +140,6 @@ const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
           onClick={handleClick}
           className="flex w-full items-center gap-0 text-left"
         >
-          {/* Left color bar */}
           <div className={cn("w-[3px] self-stretch shrink-0", barColor)} />
 
           <div className="flex flex-1 items-center gap-2 px-3 py-2">
@@ -125,23 +159,38 @@ const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
               {step.node_name}
             </span>
 
-            {/* File operation badge */}
             {fileOp && (
-              <span
-                className={cn(
-                  "flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium",
-                  fileOp.bg,
-                  fileOp.text
-                )}
-              >
+              <span className={cn("flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium", fileOp.bg, fileOp.text)}>
                 <fileOp.icon className="size-2.5" />
                 {fileOp.label}
               </span>
             )}
 
+            {/* Warning indicators */}
+            {(hasMaxTokensWarning || hasContentFilterWarning) && (
+              <AlertTriangle className="size-3 shrink-0 text-amber-500" />
+            )}
+
+            {/* Model tag */}
+            {modelUsed && (
+              <span className="rounded bg-slate-100 px-1 py-0.5 text-[9px] text-slate-500">
+                {modelUsed}
+              </span>
+            )}
+
             <div className="flex-1" />
 
-            {/* Duration */}
+            {/* Enhanced metrics in collapsed view */}
+            {(ds?.show_token_counts ?? true) && step.tokens_used > 0 && (
+              <span className="shrink-0 text-[9px] text-slate-400">
+                {inputTokens > 0 ? `${inputTokens}/${outputTokens}` : step.tokens_used.toLocaleString()} tok
+              </span>
+            )}
+            {(ds?.show_costs ?? true) && step.cost_usd > 0 && (
+              <span className="shrink-0 text-[9px] text-slate-500 font-medium">
+                ${step.cost_usd.toFixed(4)}
+              </span>
+            )}
             {step.duration_ms != null && (
               <span className="shrink-0 text-[10px] text-slate-400">
                 {(step.duration_ms / 1000).toFixed(1)}s
@@ -150,12 +199,15 @@ const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
           </div>
         </button>
 
-        {/* One-line result summary (collapsed) */}
-        {!expanded && resultSummary && (
-          <div className="pb-1.5 pl-[3px]">
-            <p className="truncate px-3 text-[10px] text-slate-400">
-              → {resultSummary}
-            </p>
+        {/* Warning banners */}
+        {hasMaxTokensWarning && (
+          <div className="mx-3 mb-1 rounded bg-amber-50 px-2 py-1 text-[10px] text-amber-700">
+            Response was truncated — consider increasing max_output_tokens
+          </div>
+        )}
+        {hasContentFilterWarning && (
+          <div className="mx-3 mb-1 rounded bg-red-50 px-2 py-1 text-[10px] text-red-700">
+            Response was blocked by content filter
           </div>
         )}
 
@@ -174,7 +226,8 @@ const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
                 {step.tokens_used > 0 && (
                   <span>
                     <strong className="text-slate-600">Tokens:</strong>{" "}
-                    {step.tokens_used.toLocaleString()}
+                    {inputTokens > 0 ? `${inputTokens} in / ${outputTokens} out` : step.tokens_used.toLocaleString()}
+                    {thinkingTokens > 0 && ` / ${thinkingTokens} thinking`}
                   </span>
                 )}
                 {step.cost_usd > 0 && (
@@ -183,55 +236,97 @@ const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
                     {step.cost_usd.toFixed(4)}
                   </span>
                 )}
+                {llmCalls > 0 && (
+                  <span className={llmCalls > 2 ? "text-amber-600" : ""}>
+                    <strong>{llmCalls}</strong> LLM calls
+                  </span>
+                )}
+                {toolCalls > 0 && (
+                  <span>
+                    <strong>{toolCalls}</strong> tool calls
+                  </span>
+                )}
                 <span className="rounded bg-slate-100 px-1 py-0.5 font-medium text-slate-500">
                   {formatNodeType(step.node_type)}
                 </span>
               </div>
 
-              {/* Tool details */}
-              {step.tool_name && (
+              {/* C6: Config Snapshot */}
+              {componentConfig && (
                 <div>
-                  <h5 className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                    Tool
-                  </h5>
-                  <span className="text-xs text-slate-600">{step.tool_name}</span>
-                  {step.tool_config !== null && Object.keys(step.tool_config).length > 0 && (
-                    <CollapsibleJson label="Config" data={step.tool_config} />
+                  <button
+                    onClick={() => setShowConfig(!showConfig)}
+                    className="flex items-center gap-1 text-[10px] font-medium text-slate-400 hover:text-slate-600"
+                  >
+                    <Settings className="size-2.5" />
+                    {showConfig ? <ChevronDown className="size-2.5" /> : <ChevronRight className="size-2.5" />}
+                    Config Snapshot
+                  </button>
+                  {showConfig && (
+                    <div className="mt-1 space-y-0.5 text-[9px]">
+                      {Object.entries(componentConfig).map(([k, v]) => (
+                        <div key={k} className="flex gap-2">
+                          <span className="text-slate-400">{k}:</span>
+                          <span className="text-slate-600">
+                            {typeof v === "string" ? v.slice(0, 100) : JSON.stringify(v)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               )}
 
-              {/* Input payload */}
-              {step.input_payload !== null && Object.keys(step.input_payload).length > 0 && (
-                <CollapsibleJson label="Input Payload" data={step.input_payload} />
+              {/* C4: LLM Call Timeline (inner loop visibility) */}
+              {(ds?.show_inner_llm_calls ?? true) && llmCallEvents.length > 0 && (
+                <LLMCallTimeline
+                  llmEvents={llmCallEvents}
+                  toolEvents={toolCallEvents}
+                  showThinking={ds?.show_thinking ?? true}
+                  showRawMessages={ds?.show_raw_messages ?? false}
+                />
               )}
 
-              {/* Output payload */}
-              {output !== null && Object.keys(output).length > 0 && (
-                <CollapsibleJson label="Output Payload" data={output as Record<string, unknown>} />
+              {/* C7: Error Detail Panel */}
+              {errorEvents.length > 0 && (
+                <div className="rounded border border-red-200 bg-red-50 p-2">
+                  <h5 className="text-[10px] font-semibold text-red-600">Errors</h5>
+                  {errorEvents.map((evt) => {
+                    const d = evt.data as Record<string, unknown>;
+                    return (
+                      <div key={evt.id} className="mt-1 text-[10px] text-red-700">
+                        <span className="font-medium">{d.error_type as string}:</span>{" "}
+                        {String(d.error_message)}
+                        {d.retry_attempt ? (
+                          <span className="ml-1 text-red-400">
+                            (attempt {Number(d.retry_attempt)})
+                          </span>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Input/Output (C1) */}
+              {step.input_payload !== null && step.input_payload && Object.keys(step.input_payload).length > 0 && (
+                <CollapsibleJson label="Input" data={step.input_payload} />
+              )}
+              {output !== null && output && Object.keys(output).length > 0 && (
+                <CollapsibleJson label="Output" data={output as Record<string, unknown>} />
               )}
 
               {/* Routing decision */}
-              {step.routing_decision !== null && Object.keys(step.routing_decision).length > 0 && (
+              {step.routing_decision !== null && step.routing_decision && Object.keys(step.routing_decision).length > 0 && (
                 <div>
                   <h5 className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                     Routing Decision
                   </h5>
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="text-slate-600">
-                      → {(step.routing_decision as Record<string, unknown>).chosen as string}
-                    </span>
-                    {step.confidence_score != null && (
-                      <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">
-                        {(step.confidence_score * 100).toFixed(0)}% confidence
-                      </span>
-                    )}
-                  </div>
                   <CollapsibleJson label="Full Decision" data={step.routing_decision} />
                 </div>
               )}
 
-              {/* Guardrails triggered */}
+              {/* Guardrails */}
               {step.guardrails_fired !== null && (step.guardrails_fired as unknown[]).length > 0 && (
                 <div>
                   <h5 className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
@@ -239,10 +334,7 @@ const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
                   </h5>
                   <div className="flex flex-wrap gap-1">
                     {(step.guardrails_fired as string[]).map((g) => (
-                      <span
-                        key={g}
-                        className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-600"
-                      >
+                      <span key={g} className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-600">
                         {g}
                       </span>
                     ))}
@@ -250,55 +342,20 @@ const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
                 </div>
               )}
 
-              {/* Knowledge retrieved (retriever nodes) */}
-              {step.node_type === "retriever" && output !== null && Array.isArray(output.documents) && (
-                <div>
-                  <h5 className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                    Knowledge Retrieved
-                  </h5>
-                  <div className="space-y-1">
-                    {(output.documents as { title: string; relevance: number }[]).map(
-                      (doc, i) => (
-                        <div
-                          key={i}
-                          className="flex items-center gap-2 text-xs text-slate-600"
-                        >
-                          <span className="truncate">{doc.title}</span>
-                          <span className="shrink-0 rounded bg-emerald-50 px-1 py-0.5 text-[10px] text-emerald-600">
-                            {(doc.relevance * 100).toFixed(0)}%
-                          </span>
-                        </div>
-                      )
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* File operation details */}
+              {/* File operation */}
               {fileOp && (
                 <div>
                   <h5 className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                     File Operation
                   </h5>
-                  <div className="flex items-center gap-2 text-xs">
-                    <span
-                      className={cn(
-                        "flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium",
-                        fileOp.bg,
-                        fileOp.text
-                      )}
-                    >
-                      <fileOp.icon className="size-2.5" />
-                      {fileOp.label}
-                    </span>
-                    <span className="text-slate-500">
-                      {step.file_operation_type}
-                    </span>
-                  </div>
+                  <span className={cn("flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium w-fit", fileOp.bg, fileOp.text)}>
+                    <fileOp.icon className="size-2.5" />
+                    {fileOp.label}
+                  </span>
                 </div>
               )}
 
-              {/* Annotation section */}
+              {/* Annotation */}
               <div className="border-t border-dashed pt-2">
                 <AnnotationInput stepId={step.id} />
               </div>
@@ -312,7 +369,6 @@ const InspectorNode = forwardRef<HTMLDivElement, InspectorNodeProps>(
 
 export default InspectorNode;
 
-// ── Collapsible JSON ─────────────────────────────────────────
 function CollapsibleJson({
   label,
   data,

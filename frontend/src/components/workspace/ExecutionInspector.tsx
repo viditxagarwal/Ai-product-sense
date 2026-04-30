@@ -1,5 +1,11 @@
 "use client";
 
+/**
+ * Enhanced Execution Inspector (Sections C.1-C.5)
+ * Fetches execution events and renders summary badges, step pills,
+ * timing bar, LLM call timeline, tool call cards, and thinking blocks.
+ */
+
 import { useCallback, useEffect, useRef } from "react";
 import {
   Search,
@@ -12,6 +18,7 @@ import {
 } from "lucide-react";
 import { useExecutionStore } from "@/stores/execution-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
+import ExecutionSummaryBar from "./ExecutionSummaryBar";
 import TimingBar from "./TimingBar";
 import InspectorNode from "./InspectorNode";
 
@@ -20,32 +27,45 @@ export default function ExecutionInspector() {
   const {
     inspectorRun,
     inspectorSteps,
+    inspectorEvents,
+    inspectorSummary,
     inspectorLoading,
     isStreaming,
+    displaySettings,
     fetchRun,
     fetchRunSteps,
+    fetchRunEvents,
+    fetchRunSummary,
+    fetchDisplaySettings,
   } = useExecutionStore();
 
   const nodeRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  // Fetch run and steps when selectedRunId changes
+  // Fetch run, steps, events, and summary when selectedRunId changes
   useEffect(() => {
     if (!selectedRunId) return;
     fetchRun(selectedRunId);
     fetchRunSteps(selectedRunId);
-  }, [selectedRunId, fetchRun, fetchRunSteps]);
+    fetchRunEvents(selectedRunId);
+    fetchRunSummary(selectedRunId);
+  }, [selectedRunId, fetchRun, fetchRunSteps, fetchRunEvents, fetchRunSummary]);
 
-  // Scroll to node when clicking timing bar segment
+  // Load display settings once
+  useEffect(() => {
+    if (!displaySettings) {
+      fetchDisplaySettings();
+    }
+  }, [displaySettings, fetchDisplaySettings]);
+
   const scrollToNode = useCallback((stepId: string) => {
     const el = nodeRefs.current[stepId];
     if (el) {
       el.scrollIntoView({ behavior: "smooth", block: "center" });
     }
-    // Also select it in workspace store
     useWorkspaceStore.getState().setSelectedStepId(stepId);
   }, []);
 
-  // ── Empty state: no run selected ────────────────────────
+  // ── Empty state ──────────────────────────────────────────
   if (!selectedRunId) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-6 text-center">
@@ -58,7 +78,6 @@ export default function ExecutionInspector() {
     );
   }
 
-  // ── Loading state ───────────────────────────────────────
   if (inspectorLoading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -67,7 +86,6 @@ export default function ExecutionInspector() {
     );
   }
 
-  // ── Streaming in progress ───────────────────────────────
   if (isStreaming) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-6 text-center">
@@ -87,71 +105,79 @@ export default function ExecutionInspector() {
     );
   }
 
-  // ── Compute summary stats ──────────────────────────────
-  const totalSteps = inspectorSteps.length;
-  const totalDuration = inspectorRun.total_duration_ms ?? 0;
-  const totalTokens = inspectorRun.total_tokens ?? 0;
-  const totalCost = inspectorRun.total_cost_usd ?? 0;
-  const guardrailsFired = inspectorSteps.reduce((count, s) => {
-    const fired = s.guardrails_fired as unknown[] | null;
-    return count + (fired?.length ?? 0);
-  }, 0);
+  // Build default summary if API summary not loaded yet
+  const summary = inspectorSummary || {
+    execution_id: inspectorRun.id,
+    status: inspectorRun.status,
+    total_duration_ms: inspectorRun.total_duration_ms ?? 0,
+    total_tokens: inspectorRun.total_tokens ?? 0,
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    total_thinking_tokens: 0,
+    total_cache_read_tokens: 0,
+    total_cache_write_tokens: 0,
+    total_cost_usd: inspectorRun.total_cost_usd ?? 0,
+    total_llm_calls: 0,
+    total_tool_calls: 0,
+    step_count: inspectorSteps.length,
+    path_taken: [],
+    models_used: [],
+    tools_used: [],
+    cost_by_model: {},
+    cost_by_node: {},
+  };
+
+  // Group events by node_id for passing to InspectorNode
+  const eventsByNode: Record<string, typeof inspectorEvents> = {};
+  for (const evt of inspectorEvents) {
+    const nodeId = (evt.data as Record<string, unknown>).node_id as string;
+    if (nodeId) {
+      if (!eventsByNode[nodeId]) eventsByNode[nodeId] = [];
+      eventsByNode[nodeId].push(evt);
+    }
+  }
 
   return (
     <div className="flex h-full flex-col">
-      {/* ── Run summary bar ─────────────────────────────── */}
-      <div className="border-b bg-slate-50 px-3 py-2">
-        <div className="flex flex-wrap items-center gap-3 text-[10px]">
-          <span className="flex items-center gap-1 text-slate-500">
-            <Layers className="size-3" />
-            <strong className="text-slate-700">{totalSteps}</strong> steps
-          </span>
-          <span className="flex items-center gap-1 text-slate-500">
-            <Clock className="size-3" />
-            <strong className="text-slate-700">
-              {(totalDuration / 1000).toFixed(1)}s
-            </strong>
-          </span>
-          <span className="flex items-center gap-1 text-slate-500">
-            <Cpu className="size-3" />
-            <strong className="text-slate-700">
-              {totalTokens.toLocaleString()}
-            </strong>{" "}
-            tokens
-          </span>
-          <span className="flex items-center gap-1 text-slate-500">
-            <DollarSign className="size-3" />
-            <strong className="text-slate-700">
-              ${totalCost.toFixed(2)}
-            </strong>
-          </span>
-          {guardrailsFired > 0 && (
-            <span className="flex items-center gap-1 text-amber-600">
-              <Shield className="size-3" />
-              <strong>{guardrailsFired}</strong> guardrail
-              {guardrailsFired > 1 ? "s" : ""} fired
-            </span>
-          )}
-          <span
-            className={`ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium ${
-              inspectorRun.status === "completed"
-                ? "bg-emerald-50 text-emerald-600"
-                : inspectorRun.status === "failed"
-                  ? "bg-red-50 text-red-600"
-                  : "bg-slate-100 text-slate-500"
-            }`}
-          >
-            {inspectorRun.status}
-          </span>
-        </div>
-      </div>
+      {/* C.1: Enhanced Summary Bar */}
+      <ExecutionSummaryBar summary={summary} status={inspectorRun.status} />
 
-      {/* ── Timing bar ──────────────────────────────────── */}
+      {/* B2: Timing Bar */}
       <div className="border-b">
         <TimingBar steps={inspectorSteps} onSegmentClick={scrollToNode} />
       </div>
 
-      {/* ── Node timeline ───────────────────────────────── */}
+      {/* B1: Step Pills */}
+      {inspectorSteps.length > 1 && (
+        <div className="flex items-center gap-1 overflow-x-auto border-b px-3 py-1.5">
+          {inspectorSteps.map((step, i) => {
+            const isActive = step.id === selectedStepId;
+            return (
+              <button
+                key={step.id}
+                onClick={() => scrollToNode(step.id)}
+                className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-medium transition-colors ${
+                  step.status === "completed"
+                    ? isActive ? "bg-emerald-100 text-emerald-700" : "bg-emerald-50 text-emerald-600"
+                    : step.status === "failed"
+                      ? "bg-red-50 text-red-600"
+                      : step.status === "running"
+                        ? "bg-blue-50 text-blue-600 animate-pulse"
+                        : "bg-slate-50 text-slate-400"
+                }`}
+              >
+                <span className="size-1.5 rounded-full bg-current" />
+                {step.node_name.length > 15 ? step.node_name.slice(0, 15) + "..." : step.node_name}
+                {i < inspectorSteps.length - 1 && (
+                  <span className="ml-1 text-slate-300">→</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Node Timeline with events */}
       <div className="flex-1 overflow-y-auto">
         {inspectorSteps.map((step) => (
           <InspectorNode
@@ -161,6 +187,10 @@ export default function ExecutionInspector() {
             }}
             step={step}
             isSelected={step.id === selectedStepId}
+            events={eventsByNode[step.id] || inspectorEvents.filter(
+              e => (e.data as Record<string, unknown>).step_id === step.id
+            )}
+            displaySettings={displaySettings}
           />
         ))}
         {inspectorSteps.length === 0 && (

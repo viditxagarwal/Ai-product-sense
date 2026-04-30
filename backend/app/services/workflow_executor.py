@@ -1,18 +1,25 @@
 """Workflow executor — walks the workflow graph and calls the LLM.
 
+Enhanced to emit execution events (Section G) and capture full Layer 1-4
+data (Section A) for every LLM call, tool execution, and node step.
+
 If the workflow fails for ANY reason, falls back to a direct LLM call
 with the system prompt + user message. The user always gets a response.
 """
 
 import asyncio
 import logging
+import time
 import traceback
 from datetime import datetime, timezone
-
 from functools import partial
 
 from app.database import supabase
-from app.services.llm_service import call_llm_streaming
+from app.services.event_emitter import EventEmitter
+from app.services.llm_service import (
+    StreamingContext,
+    call_llm_streaming,
+)
 from app.services.prompt_injector import build_config_injections
 from app.services.tool_executor import (
     build_openai_tools,
@@ -70,7 +77,25 @@ def _build_config_snapshot(ctx: dict) -> dict:
         "intermediate_steps_in_chat": config.get("intermediate_steps_in_chat", "status_pills"),
         "explanation_depth": config.get("explanation_depth", "reasoning_plus_sources"),
         "confidence_display": config.get("confidence_display", "color_coded_bands"),
+        "primary_model": config.get("primary_model", "gpt-4o-mini"),
+        "temperature": float(config.get("temperature", 0.2)),
+        "max_output_tokens": config.get("max_output_tokens", 4096),
+        "streaming_mode": config.get("streaming_mode", "chunk_by_section"),
+        "chain_of_thought_visibility": config.get("chain_of_thought_visibility", "auto"),
     }
+
+
+def _build_full_config_snapshot(ctx: dict) -> dict:
+    """Full configuration snapshot for execution record (Section A, 4.19)."""
+    config = ctx.get("config") or {}
+    snapshot = _build_config_snapshot(ctx)
+    # Add all behavioral settings
+    for key in ["memory_type", "buffer_size_messages", "routing_strategy",
+                "tool_selection_strategy", "max_tool_calls_per_node",
+                "guardrail_priority_order", "output_format", "citation_format"]:
+        if key in config:
+            snapshot[key] = config[key]
+    return snapshot
 
 
 # ══════════════════════════════════════════════════════════════
@@ -102,9 +127,9 @@ def _get_thread_context(thread_id: str) -> dict:
     # System prompt from prompt version
     system_prompt = ""
     if cfg.data and cfg.data.get("prompt_version_id"):
-        pv = supabase.table("prompt_versions").select("content").eq("id", cfg.data["prompt_version_id"]).single().execute()
+        pv = supabase.table("prompt_versions").select("prompt_text").eq("id", cfg.data["prompt_version_id"]).single().execute()
         if pv.data:
-            system_prompt = pv.data.get("content", "")
+            system_prompt = pv.data.get("prompt_text", "") or pv.data.get("content", "")
 
     # Inject config-driven response guidelines
     if cfg.data:
@@ -123,7 +148,7 @@ def _get_thread_context(thread_id: str) -> dict:
 
     # Model from config
     result["model"] = cfg.data.get("primary_model", "gpt-4o-mini") if cfg.data else "gpt-4o-mini"
-    result["temperature"] = cfg.data.get("temperature", 0.2) if cfg.data else 0.2
+    result["temperature"] = float(cfg.data.get("temperature", 0.2)) if cfg.data else 0.2
     result["max_tokens"] = cfg.data.get("max_output_tokens", 4096) if cfg.data else 4096
 
     return result
@@ -167,14 +192,11 @@ async def _direct_llm_call(
     temperature = ctx["temperature"]
     max_tokens = ctx["max_tokens"]
 
-    # Build messages
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
 
-    # Add conversation history
     history = _get_conversation_history(thread_id)
-    # Remove the last user message if it matches (we'll add it fresh)
     if history and history[-1]["role"] == "user" and history[-1]["content"] == user_message:
         history = history[:-1]
     messages.extend(history)
@@ -190,7 +212,21 @@ async def _direct_llm_call(
     run_id = run.data[0]["id"]
 
     config_snapshot = _build_config_snapshot(ctx)
+    full_snapshot = _build_full_config_snapshot(ctx)
 
+    # Create event emitter
+    emitter = EventEmitter(run_id, send_event)
+
+    await emitter.workflow_started(
+        workflow_id="direct",
+        workflow_name=f"Direct Chat ({model})",
+        trigger="user_message",
+        user_input=user_message,
+        config_snapshot=full_snapshot,
+        step_count=1,
+    )
+
+    # Also send legacy event for backward compat
     await send_event({
         "type": "run_started",
         "run_id": run_id,
@@ -198,7 +234,6 @@ async def _direct_llm_call(
         "config_snapshot": config_snapshot,
     })
 
-    # Show fallback warning
     if is_fallback:
         await send_event({
             "type": "system_message",
@@ -206,7 +241,7 @@ async def _direct_llm_call(
             "severity": "warning",
         })
 
-    # Create a single step
+    # Create step record
     step = supabase.table("execution_steps").insert({
         "run_id": run_id,
         "step_number": 1,
@@ -216,6 +251,15 @@ async def _direct_llm_call(
     }).execute()
     step_id = step.data[0]["id"]
 
+    node_event_id = await emitter.node_started(
+        node_id="direct",
+        node_label=f"Direct Chat ({model})",
+        node_type="direct_llm",
+        component_config={"model": model, "temperature": temperature, "max_output_tokens": max_tokens},
+        input_context=user_message,
+        input_context_source="user_message",
+    )
+
     await send_event({
         "type": "step_started",
         "step_id": step_id,
@@ -224,8 +268,9 @@ async def _direct_llm_call(
         "node_name": f"Direct Chat ({model})",
     })
 
-    start_time = datetime.now(timezone.utc)
+    start_time = time.monotonic()
     full_response = ""
+    streaming_ctx = StreamingContext()
 
     try:
         async for chunk in call_llm_streaming(
@@ -234,52 +279,93 @@ async def _direct_llm_call(
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            streaming_ctx=streaming_ctx,
         ):
             full_response += chunk
-            await send_event({
-                "type": "step_progress",
-                "step_id": step_id,
-                "content": chunk,
-            })
+            await emitter.step_progress(step_id, chunk)
 
-        duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
+        duration_ms = int((time.monotonic() - start_time) * 1000)
 
-        # Mark step completed
+        # Emit LLM call events from streaming context
+        for i, llm_call in enumerate(streaming_ctx.llm_calls):
+            await emitter.llm_call_completed(
+                node_id="direct", call_index=i,
+                call_data=llm_call.to_dict(),
+                parent_event_id=node_event_id,
+            )
+
+        # Mark step completed with token/cost data
         supabase.table("execution_steps").update({
             "status": "completed",
             "duration_ms": duration_ms,
-            "output_payload": {"response_length": len(full_response)},
+            "tokens_used": streaming_ctx.total_tokens,
+            "cost_usd": round(streaming_ctx.total_cost_usd, 4),
+            "output_payload": {
+                "response_length": len(full_response),
+                "input_tokens": streaming_ctx.total_input_tokens,
+                "output_tokens": streaming_ctx.total_output_tokens,
+                "thinking_tokens": streaming_ctx.total_thinking_tokens,
+                "model": model,
+            },
         }).eq("id", step_id).execute()
+
+        await emitter.node_completed(
+            node_id="direct", status="completed", output_result=full_response,
+            duration_ms=duration_ms, total_tokens=streaming_ctx.total_tokens,
+            total_cost_usd=streaming_ctx.total_cost_usd,
+            llm_call_count=len(streaming_ctx.llm_calls),
+            tool_call_count=len(streaming_ctx.tool_calls),
+            parent_event_id=node_event_id,
+        )
 
         await send_event({
             "type": "step_completed",
             "step_id": step_id,
             "step_number": 1,
             "duration_ms": duration_ms,
+            "tokens": streaming_ctx.total_tokens,
+            "cost_usd": round(streaming_ctx.total_cost_usd, 6),
             "result_summary": f"Generated {len(full_response)} chars",
         })
 
-        # Complete run
+        # Complete run with totals
         supabase.table("execution_runs").update({
             "status": "completed",
             "total_duration_ms": duration_ms,
+            "total_tokens": streaming_ctx.total_tokens,
+            "total_cost_usd": round(streaming_ctx.total_cost_usd, 4),
             "step_count": 1,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", run_id).execute()
+
+        await emitter.workflow_completed(
+            status="completed", final_output=full_response,
+            total_duration_ms=duration_ms, total_tokens=streaming_ctx.total_tokens,
+            total_cost_usd=streaming_ctx.total_cost_usd, path_taken=["direct"],
+        )
 
         await send_event({
             "type": "run_completed",
             "run_id": run_id,
             "total_duration_ms": duration_ms,
+            "total_tokens": streaming_ctx.total_tokens,
+            "total_cost_usd": round(streaming_ctx.total_cost_usd, 6),
         })
 
-        # Save and send assistant message
+        # Save assistant message
         supabase.table("thread_messages").insert({
             "thread_id": thread_id,
             "role": "assistant",
             "content": full_response,
             "message_type": "text",
-            "metadata": {"run_id": run_id, "mode": "direct" if is_fallback else "normal"},
+            "metadata": {
+                "run_id": run_id,
+                "mode": "direct" if is_fallback else "normal",
+                "model": model,
+                "tokens": streaming_ctx.total_tokens,
+                "cost_usd": round(streaming_ctx.total_cost_usd, 6),
+                "duration_ms": duration_ms,
+            },
         }).execute()
 
         await send_event({
@@ -287,11 +373,18 @@ async def _direct_llm_call(
             "content": full_response,
         })
 
-        logger.info("[exec] Direct LLM call completed: %d chars, %dms", len(full_response), duration_ms)
+        logger.info("[exec] Direct LLM call completed: %d chars, %dms, %d tokens, $%.6f",
+                     len(full_response), duration_ms, streaming_ctx.total_tokens, streaming_ctx.total_cost_usd)
 
     except Exception as e:
         error_msg = str(e)
         logger.error("[exec] Direct LLM call failed: %s\n%s", error_msg, traceback.format_exc())
+
+        await emitter.error(
+            node_id="direct", error_type="llm_error",
+            error_message=error_msg,
+            stack_trace=traceback.format_exc(),
+        )
 
         supabase.table("execution_steps").update({
             "status": "failed",
@@ -311,12 +404,7 @@ async def _direct_llm_call(
         }).eq("id", run_id).execute()
 
         await send_event({"type": "run_failed", "run_id": run_id, "error": error_msg})
-
-        # Send error as visible message
-        await send_event({
-            "type": "execution_error",
-            "error": error_msg,
-        })
+        await send_event({"type": "execution_error", "error": error_msg})
 
 
 # ══════════════════════════════════════════════════════════════
@@ -328,7 +416,6 @@ async def execute_workflow(thread_id: str, user_message: str, send_event):
     logger.info("[exec] === Starting execution: thread=%s ===", thread_id)
     logger.info("[exec] User message: '%s'", user_message[:200])
 
-    # ── Resolve context ──────────────────────────────────────
     try:
         ctx = _get_thread_context(thread_id)
     except Exception as e:
@@ -345,7 +432,6 @@ async def execute_workflow(thread_id: str, user_message: str, send_event):
                 ctx["config"]["config_name"] if ctx.get("config") else "NONE",
                 len(ctx["system_prompt"]))
 
-    # ── Check if workflow has nodes ──────────────────────────
     workflow = ctx.get("workflow")
     graph_data = workflow.get("graph_data", {}) if workflow else {}
     nodes = _get_nodes_in_order(graph_data)
@@ -357,7 +443,6 @@ async def execute_workflow(thread_id: str, user_message: str, send_event):
 
     logger.info("[exec] Workflow '%s' has %d nodes", workflow.get("workflow_name"), len(nodes))
 
-    # ── Try workflow execution ───────────────────────────────
     try:
         await _execute_workflow_graph(thread_id, user_message, send_event, ctx, nodes)
     except Exception as e:
@@ -368,14 +453,13 @@ async def execute_workflow(thread_id: str, user_message: str, send_event):
             "content": f"Workflow error: {e}",
             "severity": "error",
         })
-        # Fallback to direct LLM
         await _direct_llm_call(thread_id, user_message, send_event, ctx, is_fallback=True)
 
 
 async def _execute_workflow_graph(
     thread_id: str, user_message: str, send_event, ctx: dict, nodes: list[dict]
 ):
-    """Walk the workflow graph, executing each node."""
+    """Walk the workflow graph, executing each node with full event emission."""
     user_id = ctx["user_id"]
     model = ctx["model"]
     system_prompt = ctx["system_prompt"]
@@ -390,6 +474,20 @@ async def _execute_workflow_graph(
     run_id = run.data[0]["id"]
 
     config_snapshot = _build_config_snapshot(ctx)
+    full_snapshot = _build_full_config_snapshot(ctx)
+
+    # Create event emitter for this run
+    emitter = EventEmitter(run_id, send_event)
+
+    workflow = ctx.get("workflow", {})
+    await emitter.workflow_started(
+        workflow_id=workflow.get("id", ""),
+        workflow_name=workflow.get("workflow_name", ""),
+        trigger="user_message",
+        user_input=user_message,
+        config_snapshot=full_snapshot,
+        step_count=len(nodes),
+    )
 
     await send_event({
         "type": "run_started",
@@ -404,15 +502,23 @@ async def _execute_workflow_graph(
 
     last_output = ""
     total_duration = 0
-    start_time = datetime.now(timezone.utc)
+    total_tokens = 0
+    total_cost = 0.0
+    total_llm_calls = 0
+    total_tool_calls = 0
+    path_taken = []
+    start_time = time.monotonic()
 
     try:
         for i, node in enumerate(nodes):
+            node_id = node.get("id", f"node_{i}")
             node_type = node.get("type", "step")
             node_data = node.get("data", {})
             node_name = node_data.get("label", node_type)
             component_type = node_data.get("componentType", node_type)
             step_number = i + 1
+
+            path_taken.append(node_id)
 
             logger.info("[exec] Executing node: '%s' (type: %s, component: %s) [step %d/%d]",
                         node_name, node_type, component_type, step_number, len(nodes))
@@ -429,6 +535,19 @@ async def _execute_workflow_graph(
                     "duration_ms": 0,
                     "output_payload": {"status": f"{(component_type or node_type)}_passthrough"},
                 }).execute()
+
+                node_event_id = await emitter.node_started(
+                    node_id=node_id, node_label=node_name,
+                    node_type=component_type or node_type,
+                    component_config={},
+                )
+                await emitter.node_completed(
+                    node_id=node_id, status="completed", output_result="passthrough",
+                    duration_ms=0, total_tokens=0, total_cost_usd=0,
+                    llm_call_count=0, tool_call_count=0,
+                    parent_event_id=node_event_id,
+                )
+
                 await send_event({
                     "type": "step_started",
                     "step_id": step.data[0]["id"],
@@ -455,6 +574,25 @@ async def _execute_workflow_graph(
             }).execute()
             step_id = step.data[0]["id"]
 
+            # Build component config snapshot for this node
+            node_config = {
+                "llmEnabled": node_data.get("llmEnabled", True),
+                "model": node_data.get("model", model),
+                "temperature": node_data.get("temperature", temperature),
+                "max_output_tokens": node_data.get("maxOutputTokens", max_tokens),
+                "systemPrompt": node_data.get("systemPrompt", ""),
+                "boundTools": node_data.get("boundTools", []),
+                "componentType": component_type,
+            }
+
+            node_event_id = await emitter.node_started(
+                node_id=node_id, node_label=node_name,
+                node_type=component_type or node_type,
+                component_config=node_config,
+                input_context=last_output or user_message,
+                input_context_source="previous_step" if last_output else "user_message",
+            )
+
             await send_event({
                 "type": "step_started",
                 "step_id": step_id,
@@ -463,10 +601,9 @@ async def _execute_workflow_graph(
                 "node_name": node_name,
             })
 
-            step_start = datetime.now(timezone.utc)
+            step_start = time.monotonic()
 
             # ── Build messages for this node ─────────────────
-            # Support both new (systemPrompt) and old (systemPromptHint, purpose) field names
             node_instructions = (
                 node_data.get("systemPrompt")
                 or node_data.get("systemPromptHint")
@@ -475,17 +612,15 @@ async def _execute_workflow_graph(
             )
             node_messages = []
 
-            # System prompt
             effective_prompt = system_prompt
             if node_instructions:
                 effective_prompt = f"{system_prompt}\n\n## Current Step: {node_name}\n{node_instructions}"
             if effective_prompt:
                 node_messages.append({"role": "system", "content": effective_prompt})
 
-            # Conversation history
             node_messages.extend(history)
 
-            # ── Gate nodes (human_review, human_checkpoint) — auto-approve ──
+            # ── Gate nodes — auto-approve ────────────────────
             if component_type == "gate" or node_type in ("human_review", "human_checkpoint"):
                 logger.info("[exec] Gate node '%s' auto-approved", node_name)
                 duration_ms = 10
@@ -494,6 +629,14 @@ async def _execute_workflow_graph(
                     "duration_ms": duration_ms,
                     "output_payload": {"status": "auto_approved"},
                 }).eq("id", step_id).execute()
+
+                await emitter.node_completed(
+                    node_id=node_id, status="completed", output_result="auto_approved",
+                    duration_ms=duration_ms, total_tokens=0, total_cost_usd=0,
+                    llm_call_count=0, tool_call_count=0,
+                    parent_event_id=node_event_id,
+                )
+
                 await send_event({
                     "type": "step_completed",
                     "step_id": step_id,
@@ -504,13 +647,13 @@ async def _execute_workflow_graph(
                 total_duration += duration_ms
                 continue
 
-            # ── Split nodes (parallel, parallelization) ──────
+            # ── Split nodes ──────────────────────────────────
             elif component_type == "split" or node_type in ("parallel", "parallelization"):
                 node_messages.append({"role": "user", "content":
                     f"Process the following in parallel (handle all branches):\n{user_message}\n\nPrevious context:\n{last_output or 'Start of workflow'}"
                 })
 
-            # ── Decision/Route nodes (old types, now handled via edges) ──
+            # ── Decision/Route nodes ─────────────────────────
             elif node_type in ("decision", "route"):
                 conditions = node_data.get("conditions", "") or node_data.get("conditionPrompt", "")
                 if conditions:
@@ -525,6 +668,14 @@ async def _execute_workflow_graph(
                         "duration_ms": duration_ms,
                         "output_payload": {"routing_decision": "pass_through"},
                     }).eq("id", step_id).execute()
+
+                    await emitter.node_completed(
+                        node_id=node_id, status="completed", output_result="pass_through",
+                        duration_ms=duration_ms, total_tokens=0, total_cost_usd=0,
+                        llm_call_count=0, tool_call_count=0,
+                        parent_event_id=node_event_id,
+                    )
+
                     await send_event({
                         "type": "step_completed",
                         "step_id": step_id,
@@ -535,11 +686,10 @@ async def _execute_workflow_graph(
                     total_duration += duration_ms
                     continue
 
-            # ── Node type (new) or regular step ──────────────
+            # ── Regular node ─────────────────────────────────
             else:
                 llm_enabled = node_data.get("llmEnabled", True)
                 if not llm_enabled:
-                    # Tool-only node — skip LLM call, passthrough
                     logger.info("[exec] Tool-only node '%s' (llmEnabled=false), passthrough", node_name)
                     duration_ms = 50
                     supabase.table("execution_steps").update({
@@ -547,6 +697,15 @@ async def _execute_workflow_graph(
                         "duration_ms": duration_ms,
                         "output_payload": {"status": "tool_execution", "tools": node_data.get("boundTools", [])},
                     }).eq("id", step_id).execute()
+
+                    await emitter.node_completed(
+                        node_id=node_id, status="completed",
+                        output_result=f"Tool node executed ({len(node_data.get('boundTools', []))} tools)",
+                        duration_ms=duration_ms, total_tokens=0, total_cost_usd=0,
+                        llm_call_count=0, tool_call_count=0,
+                        parent_event_id=node_event_id,
+                    )
+
                     await send_event({
                         "type": "step_completed",
                         "step_id": step_id,
@@ -557,7 +716,6 @@ async def _execute_workflow_graph(
                     total_duration += duration_ms
                     continue
 
-                # LLM-enabled node — add the user message or previous output
                 if last_output:
                     node_messages.append({"role": "user", "content":
                         f"{user_message}\n\nPrevious step output:\n{last_output}"
@@ -565,7 +723,7 @@ async def _execute_workflow_graph(
                 else:
                     node_messages.append({"role": "user", "content": user_message})
 
-            # ── Resolve bound tools for this node ────────────
+            # ── Resolve bound tools ──────────────────────────
             bound_tool_ids = node_data.get("boundTools", [])
             openai_tools = None
             tool_exec_fn = None
@@ -579,8 +737,41 @@ async def _execute_workflow_graph(
                                 node_name, len(openai_tools),
                                 [t["function"]["name"] for t in openai_tools])
 
-            # ── Call LLM ─────────────────────────────────────
+            # ── Call LLM with full tracking ──────────────────
             step_output = ""
+            streaming_ctx = StreamingContext()
+
+            # Event callbacks for real-time tool/LLM tracking
+            async def _on_llm_call_start(call_idx, mdl, msgs):
+                await emitter.llm_call_started(
+                    node_id=node_id, call_index=call_idx,
+                    model_id=mdl, provider="",
+                    temperature=temperature, max_output_tokens=max_tokens,
+                    parent_event_id=node_event_id,
+                )
+
+            async def _on_llm_call_complete(call_idx, call_result):
+                await emitter.llm_call_completed(
+                    node_id=node_id, call_index=call_idx,
+                    call_data=call_result.to_dict(),
+                    parent_event_id=node_event_id,
+                )
+
+            async def _on_tool_start(tool_name, args):
+                summary = f"{tool_name}: {str(args)[:100]}"
+                await emitter.tool_started(
+                    node_id=node_id, tool_name=tool_name,
+                    input_arguments=args, input_summary=summary,
+                    parent_event_id=node_event_id,
+                )
+
+            async def _on_tool_complete(tool_result):
+                await emitter.tool_completed(
+                    node_id=node_id,
+                    tool_data=tool_result.to_dict(),
+                    parent_event_id=node_event_id,
+                )
+
             try:
                 async for chunk in call_llm_streaming(
                     user_id=user_id,
@@ -590,17 +781,25 @@ async def _execute_workflow_graph(
                     max_tokens=max_tokens,
                     tools=openai_tools,
                     tool_executor_fn=tool_exec_fn,
+                    streaming_ctx=streaming_ctx,
+                    on_llm_call_start=_on_llm_call_start,
+                    on_llm_call_complete=_on_llm_call_complete,
+                    on_tool_start=_on_tool_start,
+                    on_tool_complete=_on_tool_complete,
                 ):
                     step_output += chunk
-                    await send_event({
-                        "type": "step_progress",
-                        "step_id": step_id,
-                        "content": chunk,
-                    })
+                    await emitter.step_progress(step_id, chunk)
             except RuntimeError as e:
-                # LLM error — mark step failed but don't crash the whole run
                 error_msg = str(e)
                 logger.error("[exec] LLM call failed at node '%s': %s", node_name, error_msg)
+
+                await emitter.error(
+                    node_id=node_id, error_type="llm_error",
+                    error_message=error_msg,
+                    stack_trace=traceback.format_exc(),
+                    parent_event_id=node_event_id,
+                )
+
                 supabase.table("execution_steps").update({
                     "status": "failed",
                     "output_payload": {"error": error_msg},
@@ -612,24 +811,48 @@ async def _execute_workflow_graph(
                     "duration_ms": 0,
                     "result_summary": f"Error: {error_msg}",
                 })
-                # Re-raise to trigger fallback
                 raise
 
-            duration_ms = int((datetime.now(timezone.utc) - step_start).total_seconds() * 1000)
+            duration_ms = int((time.monotonic() - step_start) * 1000)
             total_duration += duration_ms
+            total_tokens += streaming_ctx.total_tokens
+            total_cost += streaming_ctx.total_cost_usd
+            total_llm_calls += len(streaming_ctx.llm_calls)
+            total_tool_calls += len(streaming_ctx.tool_calls)
             last_output = step_output
 
             supabase.table("execution_steps").update({
                 "status": "completed",
                 "duration_ms": duration_ms,
-                "output_payload": {"response_length": len(step_output)},
+                "tokens_used": streaming_ctx.total_tokens,
+                "cost_usd": round(streaming_ctx.total_cost_usd, 4),
+                "output_payload": {
+                    "response_length": len(step_output),
+                    "input_tokens": streaming_ctx.total_input_tokens,
+                    "output_tokens": streaming_ctx.total_output_tokens,
+                    "thinking_tokens": streaming_ctx.total_thinking_tokens,
+                    "llm_calls": len(streaming_ctx.llm_calls),
+                    "tool_calls": len(streaming_ctx.tool_calls),
+                    "model": model,
+                },
             }).eq("id", step_id).execute()
+
+            await emitter.node_completed(
+                node_id=node_id, status="completed", output_result=step_output,
+                duration_ms=duration_ms, total_tokens=streaming_ctx.total_tokens,
+                total_cost_usd=streaming_ctx.total_cost_usd,
+                llm_call_count=len(streaming_ctx.llm_calls),
+                tool_call_count=len(streaming_ctx.tool_calls),
+                parent_event_id=node_event_id,
+            )
 
             await send_event({
                 "type": "step_completed",
                 "step_id": step_id,
                 "step_number": step_number,
                 "duration_ms": duration_ms,
+                "tokens": streaming_ctx.total_tokens,
+                "cost_usd": round(streaming_ctx.total_cost_usd, 6),
                 "result_summary": f"Generated {len(step_output)} chars in {duration_ms}ms",
             })
 
@@ -637,24 +860,44 @@ async def _execute_workflow_graph(
         supabase.table("execution_runs").update({
             "status": "completed",
             "total_duration_ms": total_duration,
+            "total_tokens": total_tokens,
+            "total_cost_usd": round(total_cost, 4),
             "step_count": len(nodes),
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", run_id).execute()
+
+        await emitter.workflow_completed(
+            status="completed", final_output=last_output,
+            total_duration_ms=total_duration, total_tokens=total_tokens,
+            total_cost_usd=total_cost, path_taken=path_taken,
+        )
 
         await send_event({
             "type": "run_completed",
             "run_id": run_id,
             "total_duration_ms": total_duration,
+            "total_tokens": total_tokens,
+            "total_cost_usd": round(total_cost, 6),
+            "total_llm_calls": total_llm_calls,
+            "total_tool_calls": total_tool_calls,
         })
 
-        # Save assistant message (use last output)
         if last_output:
             supabase.table("thread_messages").insert({
                 "thread_id": thread_id,
                 "role": "assistant",
                 "content": last_output,
                 "message_type": "text",
-                "metadata": {"run_id": run_id, "mode": "workflow"},
+                "metadata": {
+                    "run_id": run_id,
+                    "mode": "workflow",
+                    "model": model,
+                    "tokens": total_tokens,
+                    "cost_usd": round(total_cost, 6),
+                    "duration_ms": total_duration,
+                    "llm_calls": total_llm_calls,
+                    "tool_calls": total_tool_calls,
+                },
             }).execute()
 
             await send_event({
@@ -662,7 +905,8 @@ async def _execute_workflow_graph(
                 "content": last_output,
             })
 
-        logger.info("[exec] Workflow run completed: %d nodes, %dms", len(nodes), total_duration)
+        logger.info("[exec] Workflow run completed: %d nodes, %dms, %d tokens, $%.6f",
+                     len(nodes), total_duration, total_tokens, total_cost)
 
     except Exception as e:
         logger.error("[exec] Workflow graph execution failed at run=%s: %s", run_id, e)
@@ -671,4 +915,4 @@ async def _execute_workflow_graph(
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", run_id).execute()
         await send_event({"type": "run_failed", "run_id": run_id, "error": str(e)})
-        raise  # propagate to trigger fallback in execute_workflow()
+        raise

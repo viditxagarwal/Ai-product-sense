@@ -68,3 +68,53 @@ class ExecutionStepUpdate(BaseModel):
     guardrails_fired: Optional[list] = None
     file_operation_type: Optional[Literal["creation", "targeted_edit", "append", "bulk_rewrite", "none"]] = None
     confidence_score: Optional[float] = None
+
+
+# ── Execution Events (Section G) ──────────────────────────
+
+class ExecutionEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    execution_id: UUID
+    parent_event_id: Optional[UUID] = None
+    event_type: str
+    timestamp: datetime
+    data: dict
+
+
+class ExecutionSummaryResponse(BaseModel):
+    """Aggregated metrics for an execution run."""
+    model_config = ConfigDict(from_attributes=True)
+
+    execution_id: UUID
+    status: str
+    total_duration_ms: Optional[int] = 0
+    total_tokens: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_thinking_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    total_cache_write_tokens: int = 0
+    total_cost_usd: float = 0.0
+    total_llm_calls: int = 0
+    total_tool_calls: int = 0
+    step_count: int = 0
+    path_taken: list[str] = []
+    models_used: list[str] = []
+    tools_used: list[str] = []
+    cost_by_model: dict = {}
+    cost_by_node: dict = {}
+
+
+class DisplaySettingsResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: UUID
+    settings: dict
+    updated_at: datetime
+
+
+class DisplaySettingsUpdate(BaseModel):
+    settings: dict

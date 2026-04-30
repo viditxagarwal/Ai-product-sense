@@ -3,9 +3,11 @@ import json
 import logging
 import traceback
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 
 from app.database import supabase
+from app.dependencies import get_current_user_id
 from app.services.workflow_executor import execute_workflow
 
 logger = logging.getLogger("ws.stream")
@@ -181,3 +183,160 @@ async def thread_stream(websocket: WebSocket, thread_id: str):
             logger.info("[ws] Cleaning up active task for thread=%s", thread_id)
             existing.cancel()
         logger.info("[ws] Connection closed: thread=%s", thread_id)
+
+
+# ══════════════════════════════════════════════════════════════
+# SSE Endpoint (Section D.1)
+# ══════════════════════════════════════════════════════════════
+
+@router.get("/runs/{run_id}/events/stream")
+async def stream_run_events(
+    run_id: str,
+    request: Request,
+    last_event_id: str = Query(None, alias="Last-Event-ID"),
+):
+    """SSE endpoint to stream execution events for a run in real-time.
+
+    Also useful for replaying completed runs — streams all stored events.
+    Supports reconnection via Last-Event-ID header.
+    """
+    async def event_generator():
+        # First: send all stored events (for replay or reconnection)
+        try:
+            query = (
+                supabase.table("execution_events")
+                .select("*")
+                .eq("execution_id", run_id)
+                .order("timestamp", desc=False)
+            )
+            resp = query.execute()
+            events = resp.data or []
+
+            # If reconnecting, skip events up to Last-Event-ID
+            skip = bool(last_event_id)
+            for evt in events:
+                if skip:
+                    if evt["id"] == last_event_id:
+                        skip = False
+                    continue
+
+                event_data = json.dumps({
+                    "event_type": evt["event_type"],
+                    "data": evt["data"],
+                    "timestamp": evt["timestamp"],
+                    "parent_event_id": evt.get("parent_event_id"),
+                })
+                yield f"id: {evt['id']}\nevent: {evt['event_type']}\ndata: {event_data}\n\n"
+
+            # Check if run is complete
+            run = supabase.table("execution_runs").select("status").eq("id", run_id).single().execute()
+            if run.data and run.data.get("status") in ("completed", "failed", "cancelled"):
+                yield f"event: stream_end\ndata: {{\"status\": \"{run.data['status']}\"}}\n\n"
+                return
+
+        except Exception as e:
+            logger.error("[sse] Error streaming events: %s", e)
+            yield f"event: error\ndata: {{\"message\": \"{str(e)[:200]}\"}}\n\n"
+            return
+
+        # For active runs: poll for new events every 1s
+        last_ts = events[-1]["timestamp"] if events else None
+        poll_count = 0
+        max_polls = 300  # 5 minutes max
+
+        while poll_count < max_polls:
+            if await request.is_disconnected():
+                break
+
+            await asyncio.sleep(1)
+            poll_count += 1
+
+            try:
+                query = (
+                    supabase.table("execution_events")
+                    .select("*")
+                    .eq("execution_id", run_id)
+                    .order("timestamp", desc=False)
+                )
+                if last_ts:
+                    query = query.gt("timestamp", last_ts)
+                resp = query.execute()
+
+                for evt in (resp.data or []):
+                    event_data = json.dumps({
+                        "event_type": evt["event_type"],
+                        "data": evt["data"],
+                        "timestamp": evt["timestamp"],
+                        "parent_event_id": evt.get("parent_event_id"),
+                    })
+                    yield f"id: {evt['id']}\nevent: {evt['event_type']}\ndata: {event_data}\n\n"
+                    last_ts = evt["timestamp"]
+
+                # Check completion
+                run = supabase.table("execution_runs").select("status").eq("id", run_id).single().execute()
+                if run.data and run.data.get("status") in ("completed", "failed", "cancelled"):
+                    yield f"event: stream_end\ndata: {{\"status\": \"{run.data['status']}\"}}\n\n"
+                    return
+
+            except Exception:
+                pass
+
+            # Keep-alive ping every 15 polls (~15s)
+            if poll_count % 15 == 0:
+                yield f": keepalive\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ══════════════════════════════════════════════════════════════
+# Polling Endpoint (Section D.3 — fallback)
+# ══════════════════════════════════════════════════════════════
+
+@router.get("/execution/{run_id}/status")
+async def get_execution_status(run_id: str):
+    """Polling fallback for execution status (Section D.3)."""
+    try:
+        run = supabase.table("execution_runs").select("*").eq("id", run_id).single().execute()
+        if not run.data:
+            return {"error": "Run not found"}
+
+        # Get recent events since this is a polling endpoint
+        events = (
+            supabase.table("execution_events")
+            .select("event_type, data, timestamp")
+            .eq("execution_id", run_id)
+            .order("timestamp", desc=True)
+            .limit(10)
+            .execute()
+        )
+
+        r = run.data
+        # Determine current node from most recent node_started event
+        current_node = ""
+        current_action = ""
+        for evt in (events.data or []):
+            if evt["event_type"] == "node_started":
+                current_node = evt["data"].get("node_label", "")
+                current_action = f"Processing {current_node}..."
+                break
+
+        return {
+            "status": r.get("status"),
+            "steps_completed": r.get("step_count", 0),
+            "current_node": current_node,
+            "current_action": current_action,
+            "tokens_so_far": r.get("total_tokens", 0),
+            "cost_so_far": float(r.get("total_cost_usd", 0)),
+            "elapsed_ms": r.get("total_duration_ms", 0),
+            "events_since": list(reversed(events.data or [])),
+        }
+    except Exception as e:
+        return {"error": str(e)}

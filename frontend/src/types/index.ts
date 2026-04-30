@@ -518,6 +518,104 @@ export interface ExecutionStep {
   created_at: string;
 }
 
+// ─── Execution Events (Section G) ─────────────────────────
+
+export interface ExecutionEvent {
+  id: string;
+  execution_id: string;
+  parent_event_id: string | null;
+  event_type: string;
+  timestamp: string;
+  data: Record<string, unknown>;
+}
+
+export interface LLMCallData {
+  model_id: string;
+  provider: string;
+  input_tokens: number;
+  output_tokens: number;
+  thinking_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  output_text: string;
+  thinking_text: string;
+  tool_calls_requested: { tool_name: string; tool_id: string; arguments: string }[];
+  stop_reason: string;
+  cost_usd: number;
+  latency_ms: number;
+  time_to_first_token_ms: number;
+  tokens_per_second: number;
+  temperature: number;
+  max_output_tokens: number;
+  system_prompt: string;
+  request_id: string;
+  is_retry: boolean;
+  retry_reason: string;
+  retry_attempt: number;
+}
+
+export interface ToolCallData {
+  tool_name: string;
+  tool_display_name: string;
+  tool_category: string;
+  input_arguments: Record<string, unknown>;
+  input_summary: string;
+  output_result: unknown;
+  output_summary: string;
+  output_type: string;
+  output_size_bytes: number;
+  status: string;
+  error_message: string;
+  error_type: string;
+  duration_ms: number;
+  triggered_by: string;
+  cache_hit: boolean;
+  retry_count: number;
+}
+
+export interface ExecutionSummary {
+  execution_id: string;
+  status: string;
+  total_duration_ms: number;
+  total_tokens: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_thinking_tokens: number;
+  total_cache_read_tokens: number;
+  total_cache_write_tokens: number;
+  total_cost_usd: number;
+  total_llm_calls: number;
+  total_tool_calls: number;
+  step_count: number;
+  path_taken: string[];
+  models_used: string[];
+  tools_used: string[];
+  cost_by_model: Record<string, number>;
+  cost_by_node: Record<string, number>;
+}
+
+export interface DisplaySettings {
+  show_inner_llm_calls: boolean;
+  show_tool_call_details: boolean;
+  show_thinking: boolean;
+  show_system_prompts: boolean;
+  show_raw_messages: boolean;
+  show_token_counts: boolean;
+  show_costs: boolean;
+  show_edge_evaluations: boolean;
+  show_mapping_details: boolean;
+  stream_text: boolean;
+  stream_thinking: boolean;
+  show_live_tool_cards: boolean;
+  show_progress_bar: boolean;
+  show_activity_log: boolean;
+  show_cost_breakdown: boolean;
+  show_token_heatmap: boolean;
+  show_latency_waterfall: boolean;
+  enable_comparison_view: boolean;
+}
+
 // ─── Phase 2: Files ───────────────────────────────────────
 
 export interface ThreadFile {
