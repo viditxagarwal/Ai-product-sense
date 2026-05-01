@@ -384,6 +384,25 @@ def _build_full_config_snapshot(ctx: dict) -> dict:
     return snapshot
 
 
+def _normalize_streaming_mode(streaming_mode: str | None) -> str:
+    """Map legacy DB values to the executor's current streaming modes."""
+    legacy_map = {
+        "token_by_token": "text_only",
+        "chunk_by_section": "text_only",
+        "structured_blocks": "text_only",
+        "complete_then_render": "off",
+    }
+    return legacy_map.get(streaming_mode or "", streaming_mode or "text_and_thinking")
+
+
+def _streaming_flags(streaming_mode: str | None) -> tuple[bool, bool]:
+    normalized = _normalize_streaming_mode(streaming_mode)
+    return (
+        normalized in ("text_only", "text_and_thinking", "text_and_tools", "full"),
+        normalized in ("text_and_thinking", "full"),
+    )
+
+
 # ══════════════════════════════════════════════════════════════
 # Resolve thread context
 # ══════════════════════════════════════════════════════════════
@@ -565,9 +584,9 @@ async def _direct_llm_call(
 
     try:
         config = ctx.get("config") or {}
-        streaming_mode = config.get("streaming_mode", "text_and_thinking")
-        _stream_text = streaming_mode in ("text_only", "text_and_thinking", "text_and_tools", "full")
-        _stream_thinking = streaming_mode in ("text_and_thinking", "full")
+        _stream_text, _stream_thinking = _streaming_flags(
+            config.get("streaming_mode", "text_and_thinking")
+        )
 
         async def _on_thinking_delta_direct(text):
             if _stream_thinking:
@@ -833,8 +852,7 @@ async def _execute_node_llm(
             parent_event_id=node_event_id,
         )
 
-    _g_stream_text = graph_streaming_mode in ("text_only", "text_and_thinking", "text_and_tools", "full")
-    _g_stream_thinking = graph_streaming_mode in ("text_and_thinking", "full")
+    _g_stream_text, _g_stream_thinking = _streaming_flags(graph_streaming_mode)
 
     async def _on_thinking_delta(text):
         if _g_stream_thinking:

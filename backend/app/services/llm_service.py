@@ -348,33 +348,79 @@ async def call_llm_streaming(
             if tools and tool_executor_fn:
                 create_kwargs["tools"] = tools
                 create_kwargs["parallel_tool_calls"] = parallel_tool_calls
-                create_kwargs["stream"] = False
+                create_kwargs["stream"] = True
+                create_kwargs["stream_options"] = {"include_usage": True}
 
-                response = await client.chat.completions.create(**create_kwargs)
-                choice = response.choices[0]
+                stream = await client.chat.completions.create(**create_kwargs)
+                token_count = 0
+                full_text = ""
+                tool_call_buffers: dict[int, dict[str, str]] = {}
 
-                # Capture Layer 1 data from response
+                async for chunk in stream:
+                    if getattr(chunk, "id", None) and not call_result.request_id:
+                        call_result.request_id = chunk.id
+
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        call_result.input_tokens = chunk.usage.prompt_tokens or 0
+                        call_result.output_tokens = chunk.usage.completion_tokens or 0
+
+                    if not chunk.choices:
+                        continue
+
+                    choice = chunk.choices[0]
+                    delta = choice.delta
+
+                    if choice.finish_reason:
+                        call_result.stop_reason = choice.finish_reason
+
+                    if delta and delta.content:
+                        if not ttft_recorded:
+                            call_result.time_to_first_token_ms = int((time.monotonic() - start_time) * 1000)
+                            ttft_recorded = True
+                        token_count += 1
+                        full_text += delta.content
+                        yield delta.content
+
+                    for tc_delta in getattr(delta, "tool_calls", None) or []:
+                        idx = tc_delta.index
+                        buffered = tool_call_buffers.setdefault(
+                            idx,
+                            {"id": "", "name": "", "arguments": ""},
+                        )
+                        if tc_delta.id:
+                            buffered["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                buffered["name"] += tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                buffered["arguments"] += tc_delta.function.arguments
+
                 elapsed_ms = int((time.monotonic() - start_time) * 1000)
-                usage = response.usage
-                if usage:
-                    call_result.input_tokens = usage.prompt_tokens or 0
-                    call_result.output_tokens = usage.completion_tokens or 0
-                    call_result.total_tokens = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
-
                 call_result.latency_ms = elapsed_ms
-                call_result.stop_reason = choice.finish_reason or ""
-                call_result.output_text = choice.message.content or ""
-                call_result.request_id = getattr(response, 'id', '') or ''
+                call_result.output_text = full_text
+                call_result.total_tokens = call_result.input_tokens + call_result.output_tokens
 
-                # Extract tool calls
-                if choice.message.tool_calls:
+                tool_calls = [
+                    {
+                        "id": data["id"] or f"call_{round_num}_{idx}",
+                        "type": "function",
+                        "function": {
+                            "name": data["name"],
+                            "arguments": data["arguments"],
+                        },
+                    }
+                    for idx, data in sorted(tool_call_buffers.items())
+                    if data["name"]
+                ]
+
+                if tool_calls:
                     call_result.tool_calls_requested = [
                         {
-                            "tool_name": tc.function.name,
-                            "tool_id": tc.id,
-                            "arguments": tc.function.arguments,
+                            "tool_name": tc["function"]["name"],
+                            "tool_id": tc["id"],
+                            "arguments": tc["function"]["arguments"],
                         }
-                        for tc in choice.message.tool_calls
+                        for tc in tool_calls
                     ]
 
                 # Compute cost
@@ -396,18 +442,23 @@ async def call_llm_streaming(
                 call_index += 1
 
                 # Check if LLM wants to call tools
-                if choice.finish_reason == "tool_calls" or (choice.message.tool_calls and len(choice.message.tool_calls) > 0):
+                if tool_calls:
                     logger.info("[llm] LLM requested %d tool call(s) (round %d)",
-                                len(choice.message.tool_calls), round_num + 1)
+                                len(tool_calls), round_num + 1)
 
-                    current_messages.append(choice.message.model_dump())
+                    current_messages.append({
+                        "role": "assistant",
+                        "content": full_text or "",
+                        "tool_calls": tool_calls,
+                    })
 
-                    for tc in choice.message.tool_calls:
-                        fn_name = tc.function.name
+                    for tc in tool_calls:
+                        fn_name = tc["function"]["name"]
+                        raw_args = tc["function"]["arguments"]
                         try:
-                            fn_args = json.loads(tc.function.arguments)
+                            fn_args = json.loads(raw_args)
                         except json.JSONDecodeError:
-                            fn_args = {"input": tc.function.arguments}
+                            fn_args = {"input": raw_args}
 
                         logger.info("[llm] Executing tool: %s(%s)", fn_name, json.dumps(fn_args)[:100])
 
@@ -479,16 +530,15 @@ async def call_llm_streaming(
 
                         current_messages.append({
                             "role": "tool",
-                            "tool_call_id": tc.id,
+                            "tool_call_id": tc["id"],
                             "content": tool_result_str,
                         })
 
                     continue
 
                 # No tool calls — final text response
-                if choice.message.content:
-                    yield choice.message.content
-                logger.info("[llm] LLM responded with final text (round %d)", round_num + 1)
+                logger.info("[llm] LLM streamed final text with tools available: ~%d chunks (round %d)",
+                            token_count, round_num + 1)
                 return
 
             else:
