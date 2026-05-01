@@ -368,7 +368,7 @@ def _build_config_snapshot(ctx: dict) -> dict:
         "primary_model": config.get("primary_model", "gpt-4o-mini"),
         "temperature": float(config.get("temperature", 0.2)),
         "max_output_tokens": config.get("max_output_tokens", 4096),
-        "streaming_mode": config.get("streaming_mode", "chunk_by_section"),
+        "streaming_mode": config.get("streaming_mode", "text_and_thinking"),
         "chain_of_thought_visibility": config.get("chain_of_thought_visibility", "auto"),
     }
 
@@ -565,10 +565,12 @@ async def _direct_llm_call(
 
     try:
         config = ctx.get("config") or {}
-        streaming_mode = config.get("streaming_mode", "chunk_by_section")
+        streaming_mode = config.get("streaming_mode", "text_and_thinking")
+        _stream_text = streaming_mode in ("text_only", "text_and_thinking", "text_and_tools", "full")
+        _stream_thinking = streaming_mode in ("text_and_thinking", "full")
 
         async def _on_thinking_delta_direct(text):
-            if streaming_mode == "token_by_token":
+            if _stream_thinking:
                 await send_event({"type": "thinking_delta", "content": text})
 
         async for chunk in call_llm_streaming(
@@ -583,7 +585,7 @@ async def _direct_llm_call(
             reasoning_effort=ctx.get("reasoning_effort"),
         ):
             full_response += chunk
-            if streaming_mode == "token_by_token":
+            if _stream_text:
                 await send_event({"type": "text_delta", "content": chunk})
             await emitter.step_progress(step_id, chunk)
 
@@ -831,8 +833,11 @@ async def _execute_node_llm(
             parent_event_id=node_event_id,
         )
 
+    _g_stream_text = graph_streaming_mode in ("text_only", "text_and_thinking", "text_and_tools", "full")
+    _g_stream_thinking = graph_streaming_mode in ("text_and_thinking", "full")
+
     async def _on_thinking_delta(text):
-        if graph_streaming_mode == "token_by_token":
+        if _g_stream_thinking:
             await send_event({"type": "thinking_delta", "content": text})
 
     async for chunk in call_llm_streaming(
@@ -856,7 +861,7 @@ async def _execute_node_llm(
         reasoning_effort=ctx.get("reasoning_effort"),
     ):
         step_output += chunk
-        if graph_streaming_mode == "token_by_token":
+        if _g_stream_text:
             await send_event({"type": "text_delta", "content": chunk})
         await emitter.step_progress(step_id, chunk)
 
@@ -927,7 +932,7 @@ async def _execute_workflow_graph(
     start_time = time.monotonic()
 
     config = ctx.get("config") or {}
-    graph_streaming_mode = config.get("streaming_mode", "chunk_by_section")
+    graph_streaming_mode = config.get("streaming_mode", "text_and_thinking")
     max_total_executions = workflow.get("max_total_node_executions", 50) or 50
 
     # Find start node

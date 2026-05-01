@@ -47,7 +47,7 @@ export const CONFIG_DEFAULTS: Record<string, unknown> = {
   kb_freshness_preference: "no_preference",
 
   // Output & Streaming
-  streaming_mode: "chunk_by_section",
+  streaming_mode: "text_and_thinking",
   explanation_depth: "reasoning_plus_sources",
   confidence_display: "color_coded_bands",
   output_format: "markdown",
@@ -117,7 +117,7 @@ export const CONFIG_DEFAULTS: Record<string, unknown> = {
   output_template: "domain_default",
 
   // Missing Information Strategy
-  missing_info_strategy: "hybrid",
+  missing_info_strategy: "combined",
   missing_info_autonomy: "medium",
   external_data_freshness: "cached_24h",
   assumption_source_priority: "user_provided → external_api → model_estimate",

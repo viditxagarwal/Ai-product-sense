@@ -56,10 +56,10 @@ class ConfigurationCreate(BaseModel):
     kb_freshness_preference: Literal['prefer_recent', 'prefer_authoritative', 'no_preference'] = 'no_preference'
 
     # 7.4 Output & Streaming
-    streaming_mode: Literal['token_by_token', 'chunk_by_section', 'structured_blocks', 'complete_then_render'] = 'chunk_by_section'
+    streaming_mode: Literal['off', 'text_only', 'text_and_thinking', 'text_and_tools', 'full'] = 'text_and_thinking'
     explanation_depth: Literal['result_only', 'brief_rationale', 'full_reasoning_chain', 'reasoning_plus_sources'] = 'reasoning_plus_sources'
     confidence_display: Literal['none', 'color_coded_bands', 'explicit_percentage', 'natural_language_hedging', 'icon_indicators'] = 'color_coded_bands'
-    output_format: Literal['markdown', 'structured_json', 'html', 'auto_detect'] = 'markdown'
+    output_format: Literal['freetext', 'markdown', 'structured_json', 'table', 'custom_template'] = 'markdown'
     citation_format: Literal['none', 'inline_parenthetical', 'footnotes', 'end_references', 'linked_highlights'] = 'inline_parenthetical'
     max_output_length: int = 4000
     chain_of_thought_visibility: Literal['always_show', 'always_hide', 'auto', 'user_toggleable'] = 'auto'
@@ -118,7 +118,7 @@ class ConfigurationCreate(BaseModel):
     output_template: Literal['standard_report', 'executive_summary', 'detailed_analysis', 'data_table', 'domain_default'] = 'domain_default'
 
     # 7.10 Missing Information Strategy
-    missing_info_strategy: Literal['ask_user', 'search_external', 'use_defaults', 'estimate_with_reasoning', 'hybrid'] = 'hybrid'
+    missing_info_strategy: Literal['ask_user', 'search_external', 'use_defaults', 'estimate_with_reasoning', 'rag_memory', 'structured', 'combined'] = 'combined'
     missing_info_autonomy: Literal['low', 'medium', 'high'] = 'medium'
     external_data_freshness: Literal['real_time', 'cached_24h', 'cached_7d', 'manual_refresh'] = 'cached_24h'
     assumption_source_priority: str = 'user_provided → external_api → model_estimate'

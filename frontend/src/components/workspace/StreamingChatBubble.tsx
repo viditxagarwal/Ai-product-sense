@@ -8,7 +8,7 @@ import { useExecutionStore } from "@/stores/execution-store";
 /**
  * Progressive streaming chat bubble — only renders when the backend
  * sends text_delta / thinking_delta events, which only happens when
- * the configuration's streaming_mode is "token_by_token".
+ * the configuration's streaming_mode is not "off".
  */
 export default function StreamingChatBubble() {
   const { streamingText, streamingThinkingText, isThinking, displaySettings } =

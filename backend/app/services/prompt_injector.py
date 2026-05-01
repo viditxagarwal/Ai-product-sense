@@ -80,8 +80,10 @@ def build_config_injections(config: dict) -> str:
     format_map = {
         "markdown": "Format your response in Markdown.",
         "structured_json": "Return your response as valid JSON.",
-        "html": "Format your response as clean HTML.",
+        "table": "Format your response as a well-structured table.",
+        "custom_template": "Follow the output template specified in the prompt.",
     }
+    # "freetext" = no formatting instruction (natural prose)
     if output_format in format_map:
         injections.append(format_map[output_format])
 
@@ -102,12 +104,15 @@ def build_config_injections(config: dict) -> str:
         injections.append(f"Keep your response under approximately {max_length} characters.")
 
     # ── Missing info strategy ───────────────────────────────
-    missing = config.get("missing_info_strategy", "hybrid")
+    missing = config.get("missing_info_strategy", "combined")
     missing_map = {
         "ask_user": "If you are missing information needed to answer, ask the user for it before proceeding.",
         "search_external": "If data is missing, attempt to search external sources before answering.",
         "use_defaults": "If information is missing, use reasonable defaults and note your assumptions.",
         "estimate_with_reasoning": "If data is missing, estimate with explicit reasoning and flag the estimate.",
+        "rag_memory": "If data is missing, search available knowledge bases and conversation memory before answering.",
+        "structured": "When information is missing, follow a structured checklist: identify what's missing, search available sources, then ask the user only for what cannot be found.",
+        "combined": "When information is missing, first search knowledge bases and memory, then use reasoning to estimate if possible, and ask the user only as a last resort.",
     }
     if missing in missing_map:
         injections.append(missing_map[missing])

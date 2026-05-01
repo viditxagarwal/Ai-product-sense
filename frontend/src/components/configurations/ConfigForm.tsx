@@ -475,14 +475,15 @@ export default function ConfigForm() {
       <ConfigSection title="Output & Streaming" description="Streaming mode, explanation depth, and output formatting">
         <div className="grid gap-4 sm:grid-cols-2">
           <SelectField label="Streaming Mode" fieldKey="streaming_mode" form={form} onChange={update} options={[
-            { value: "token_by_token", label: "Token-by-Token (ChatGPT-style)" },
-            { value: "chunk_by_section", label: "Chunk-by-Section (blocks appear)" },
-            { value: "structured_blocks", label: "Structured Blocks" },
-            { value: "complete_then_render", label: "Complete Then Render" },
+            { value: "off", label: "Off (no streaming)" },
+            { value: "text_only", label: "Text Only" },
+            { value: "text_and_thinking", label: "Text + Thinking" },
+            { value: "text_and_tools", label: "Text + Tools" },
+            { value: "full", label: "Full (text + thinking + tools)" },
           ]} />
           <SelectField label="Explanation Depth" fieldKey="explanation_depth" form={form} onChange={update} options={opts(["result_only", "brief_rationale", "full_reasoning_chain", "reasoning_plus_sources"])} />
           <SelectField label="Confidence Display" fieldKey="confidence_display" form={form} onChange={update} options={opts(["none", "color_coded_bands", "explicit_percentage", "natural_language_hedging", "icon_indicators"])} />
-          <SelectField label="Output Format" fieldKey="output_format" form={form} onChange={update} options={opts(["markdown", "structured_json", "html", "auto_detect"])} />
+          <SelectField label="Output Format" fieldKey="output_format" form={form} onChange={update} options={opts(["freetext", "markdown", "structured_json", "table", "custom_template"])} />
           <SelectField label="Citation Format" fieldKey="citation_format" form={form} onChange={update} options={opts(["none", "inline_parenthetical", "footnotes", "end_references", "linked_highlights"])} />
           <NumberField label="Max Output Length" fieldKey="max_output_length" form={form} onChange={update} min={100} max={32000} step={100} />
           <SelectField label="Chain-of-Thought Visibility" fieldKey="chain_of_thought_visibility" form={form} onChange={update} options={opts(["always_show", "always_hide", "auto", "user_toggleable"])} />
@@ -574,7 +575,7 @@ export default function ConfigForm() {
       {/* Section 11: Missing Information Strategy */}
       <ConfigSection title="Missing Information Strategy" description="How the system handles gaps in data" defaultOpen={false}>
         <div className="grid gap-4 sm:grid-cols-2">
-          <SelectField label="Missing Info Strategy" fieldKey="missing_info_strategy" form={form} onChange={update} options={opts(["ask_user", "search_external", "use_defaults", "estimate_with_reasoning", "hybrid"])} />
+          <SelectField label="Missing Info Strategy" fieldKey="missing_info_strategy" form={form} onChange={update} options={opts(["ask_user", "search_external", "use_defaults", "estimate_with_reasoning", "rag_memory", "structured", "combined"])} />
           <SelectField label="Missing Info Autonomy" fieldKey="missing_info_autonomy" form={form} onChange={update} options={opts(["low", "medium", "high"])} />
           <SelectField label="External Data Freshness" fieldKey="external_data_freshness" form={form} onChange={update} options={opts(["real_time", "cached_24h", "cached_7d", "manual_refresh"])} />
         </div>
