@@ -31,6 +31,7 @@ from app.services.llm_service import (
 from app.services.file_context_service import (
     build_thread_file_context,
     persist_artifacts_from_output,
+    persist_generated_artifact,
 )
 from app.services.prompt_injector import build_config_injections
 from app.services.tool_executor import (
@@ -421,13 +422,94 @@ def _with_file_context(user_message: str, file_context: dict | None) -> str:
 def _artifact_instruction() -> str:
     return (
         "\n\n## Artifact generation contract\n"
-        "When the user asks for a downloadable or reusable artifact, include each artifact as a fenced block "
-        "using this exact format:\n"
+        "Artifacts are durable files, not chat content. When the user asks for a downloadable or reusable artifact, "
+        "use an available file-writing tool to create the file. After a file is created, do not repeat the artifact "
+        "body in the chat response; only provide a short confirmation and mention that the file is in the Artifacts panel.\n"
+        "If no file-writing tool is available, include each artifact as a fenced block using this exact format:\n"
         '```artifact filename="descriptive-name.md" type="text/markdown"\n'
         "<artifact content>\n"
         "```\n"
-        "Use the right extension and MIME type, for example text/markdown, text/csv, application/json, or text/plain."
+        "Do not include both a fenced artifact body and the same content again as normal chat text."
     )
+
+
+def _files_from_tool_calls(streaming_ctx: StreamingContext) -> list[dict[str, str]]:
+    files: list[dict[str, str]] = []
+    for tool_call in streaming_ctx.tool_calls:
+        try:
+            parsed = json.loads(tool_call.output_result)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if parsed.get("file_id"):
+            files.append({
+                "file_id": parsed["file_id"],
+                "file_name": parsed.get("file_name", "Artifact"),
+                "file_type": parsed.get("file_type", ""),
+            })
+    return files
+
+
+def _dedupe_files(files: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[str] = set()
+    unique: list[dict[str, str]] = []
+    for file in files:
+        file_id = file.get("file_id", "")
+        if file_id and file_id not in seen:
+            seen.add(file_id)
+            unique.append(file)
+    return unique
+
+
+def _compact_assistant_content(content: str, files: list[dict[str, str]]) -> str:
+    """Keep chat concise when durable artifacts were created."""
+    if not files:
+        return content
+    names = ", ".join(file.get("file_name", "artifact") for file in files)
+    return (
+        f"Created {len(files)} artifact{'s' if len(files) != 1 else ''}: {names}.\n\n"
+        "Open the Artifacts panel to inspect or download the generated file content."
+    )
+
+
+def _expects_artifact_surface(user_message: str) -> bool:
+    text = user_message.lower()
+    artifact_terms = (
+        "artifact", "download", "file", "report", "document", "doc",
+        "excel", "spreadsheet", "workbook", "csv", "pdf", "memo",
+        "presentation", "deck", "deliverable",
+    )
+    creation_terms = ("create", "generate", "make", "build", "prepare", "write", "draft", "export")
+    return any(term in text for term in artifact_terms) and any(term in text for term in creation_terms)
+
+
+def _should_materialize_output(user_message: str, output: str) -> bool:
+    if _expects_artifact_surface(user_message):
+        return True
+    markdown_heading_count = len(re.findall(r"(?m)^#{1,3}\s+", output))
+    return len(output) > 1800 and markdown_heading_count >= 2
+
+
+def _materialize_output_as_artifact(
+    thread_id: str,
+    user_message: str,
+    output: str,
+    trigger_step_id: str | None = None,
+) -> dict[str, str] | None:
+    if not output.strip() or not _should_materialize_output(user_message, output):
+        return None
+    filename = "generated-report.md" if "report" in user_message.lower() else "generated-artifact.md"
+    record = persist_generated_artifact(
+        thread_id=thread_id,
+        filename=filename,
+        content=output,
+        mime_type="text/markdown",
+        trigger_step_id=trigger_step_id,
+    )
+    return {
+        "file_id": record["id"],
+        "file_name": record["file_name"],
+        "file_type": record["file_type"],
+    }
 
 
 # ══════════════════════════════════════════════════════════════
@@ -569,6 +651,7 @@ async def _direct_llm_call(
     top_p = ctx.get("top_p", 1.0)
     llm_user_message = ctx.get("assembled_user_message") or user_message
     file_context = ctx.get("file_context") or {"files": [], "total_chars": 0}
+    route_output_to_artifact = _expects_artifact_surface(user_message)
     buffer_size = ctx.get("buffer_size_messages", 20)
 
     messages = []
@@ -668,6 +751,8 @@ async def _direct_llm_call(
         _thinking_started_flag_direct = [False]  # mutable container for closure
 
         async def _on_thinking_delta_direct(text):
+            if route_output_to_artifact:
+                return
             if not _thinking_started_flag_direct[0]:
                 _thinking_started_flag_direct[0] = True
                 await emitter.thinking_started(node_id="direct", parent_event_id=node_event_id)
@@ -686,7 +771,7 @@ async def _direct_llm_call(
             reasoning_effort=ctx.get("reasoning_effort"),
         ):
             full_response += chunk
-            if _stream_text:
+            if _stream_text and not route_output_to_artifact:
                 await send_event({"type": "text_delta", "content": chunk})
             await emitter.step_progress(step_id, chunk)
 
@@ -763,8 +848,16 @@ async def _direct_llm_call(
             total_cost_usd=streaming_ctx.total_cost_usd, path_taken=["direct"],
         )
 
-        created_files = persist_artifacts_from_output(thread_id, full_response, trigger_step_id=step_id)
-        for file in created_files:
+        artifact_files = persist_artifacts_from_output(thread_id, full_response, trigger_step_id=step_id)
+        created_files = _dedupe_files([*_files_from_tool_calls(streaming_ctx), *artifact_files])
+        materialized_file = None
+        if not created_files:
+            materialized_file = _materialize_output_as_artifact(
+                thread_id, user_message, full_response, trigger_step_id=step_id
+            )
+            if materialized_file:
+                created_files = [materialized_file]
+        for file in [*artifact_files, *([materialized_file] if materialized_file else [])]:
             await send_event({
                 "type": "file_created",
                 "file_id": file["file_id"],
@@ -772,6 +865,7 @@ async def _direct_llm_call(
                 "file_type": file["file_type"],
                 "operation_type": "creation",
             })
+        assistant_content = _compact_assistant_content(full_response, created_files)
 
         await send_event({
             "type": "run_completed",
@@ -792,7 +886,7 @@ async def _direct_llm_call(
         supabase.table("thread_messages").insert({
             "thread_id": thread_id,
             "role": "assistant",
-            "content": full_response,
+            "content": assistant_content,
             "message_type": "text",
             "metadata": {
                 "run_id": run_id,
@@ -805,7 +899,7 @@ async def _direct_llm_call(
             },
         }).execute()
 
-        await send_event({"type": "assistant_message", "content": full_response, "files": created_files})
+        await send_event({"type": "assistant_message", "content": assistant_content, "files": created_files})
 
         logger.info("[exec] Direct LLM call completed: %d chars, %dms, %d tokens, $%.6f",
                      len(full_response), duration_ms, streaming_ctx.total_tokens, streaming_ctx.total_cost_usd)
@@ -908,6 +1002,7 @@ async def _execute_node_llm(
     ctx: dict, emitter: EventEmitter, send_event,
     step_id: str, step_number: int, node_event_id: str,
     graph_streaming_mode: str,
+    route_output_to_artifact: bool = False,
 ) -> tuple[str, StreamingContext]:
     """Execute an LLM call for a single node. Returns (output_text, streaming_ctx)."""
     user_id = ctx["user_id"]
@@ -976,6 +1071,8 @@ async def _execute_node_llm(
     _thinking_started_flag = [False]  # mutable container for closure
 
     async def _on_thinking_delta(text):
+        if route_output_to_artifact:
+            return
         if not _thinking_started_flag[0]:
             _thinking_started_flag[0] = True
             await emitter.thinking_started(node_id=node_id, parent_event_id=node_event_id)
@@ -1003,7 +1100,7 @@ async def _execute_node_llm(
         reasoning_effort=ctx.get("reasoning_effort"),
     ):
         step_output += chunk
-        if _g_stream_text:
+        if _g_stream_text and not route_output_to_artifact:
             await send_event({"type": "text_delta", "content": chunk})
         await emitter.step_progress(step_id, chunk)
 
@@ -1022,6 +1119,7 @@ async def _execute_workflow_graph(
     buffer_size = ctx.get("buffer_size_messages", 20)
     llm_user_message = ctx.get("assembled_user_message") or user_message
     file_context = ctx.get("file_context") or {"files": [], "total_chars": 0, "text": ""}
+    route_output_to_artifact = _expects_artifact_surface(user_message)
 
     workflow = ctx.get("workflow", {})
     run = supabase.table("execution_runs").insert({
@@ -1070,6 +1168,7 @@ async def _execute_workflow_graph(
     total_tool_calls = 0
     all_models_used: set[str] = set()
     all_tools_used: set[str] = set()
+    created_files_from_tools: list[dict[str, str]] = []
     cost_by_model: dict[str, float] = {}
     cost_by_node: dict[str, float] = {}
     loop_counts: dict[str, int] = {}        # edge_id -> iteration count
@@ -1692,6 +1791,7 @@ async def _execute_workflow_graph(
                     current_node_id, node_data, node_messages,
                     ctx, emitter, send_event,
                     step_id, step_counter, node_event_id, graph_streaming_mode,
+                    route_output_to_artifact=route_output_to_artifact,
                 )
             except RuntimeError as e:
                 error_msg = str(e)
@@ -1727,6 +1827,7 @@ async def _execute_workflow_graph(
                 cost_by_model[c.model_id] = cost_by_model.get(c.model_id, 0) + c.cost_usd
             for c in streaming_ctx.tool_calls:
                 all_tools_used.add(c.tool_name)
+            created_files_from_tools.extend(_files_from_tool_calls(streaming_ctx))
             cost_by_node[current_node_id] = round(streaming_ctx.total_cost_usd, 6)
 
             supabase.table("execution_steps").update({
@@ -1811,8 +1912,16 @@ async def _execute_workflow_graph(
             total_cost_usd=total_cost, path_taken=path_taken,
         )
 
-        created_files = persist_artifacts_from_output(thread_id, str(last_output), trigger_step_id=None)
-        for file in created_files:
+        artifact_files = persist_artifacts_from_output(thread_id, str(last_output), trigger_step_id=None)
+        created_files = _dedupe_files([*created_files_from_tools, *artifact_files])
+        materialized_file = None
+        if not created_files:
+            materialized_file = _materialize_output_as_artifact(
+                thread_id, user_message, str(last_output), trigger_step_id=None
+            )
+            if materialized_file:
+                created_files = [materialized_file]
+        for file in [*artifact_files, *([materialized_file] if materialized_file else [])]:
             await send_event({
                 "type": "file_created",
                 "file_id": file["file_id"],
@@ -1820,6 +1929,7 @@ async def _execute_workflow_graph(
                 "file_type": file["file_type"],
                 "operation_type": "creation",
             })
+        assistant_content = _compact_assistant_content(str(last_output), created_files)
 
         await send_event({
             "type": "run_completed",
@@ -1850,7 +1960,7 @@ async def _execute_workflow_graph(
             supabase.table("thread_messages").insert({
                 "thread_id": thread_id,
                 "role": "assistant",
-                "content": last_output,
+                "content": assistant_content,
                 "message_type": "text",
                 "metadata": {
                     "run_id": run_id,
@@ -1865,7 +1975,7 @@ async def _execute_workflow_graph(
                 },
             }).execute()
 
-            await send_event({"type": "assistant_message", "content": last_output, "files": created_files})
+            await send_event({"type": "assistant_message", "content": assistant_content, "files": created_files})
 
         logger.info("[exec] Workflow run completed: %d steps, %dms, %d tokens, $%.6f",
                      step_counter, total_duration, total_tokens, total_cost)

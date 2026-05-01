@@ -97,7 +97,7 @@ def _get_function_schema(tool_name: str, rec: dict) -> dict | None:
         },
         "file_writer": {
             "name": "file_writer",
-            "description": "Create a real downloadable artifact file in the current thread. Use this whenever the user asks for an Excel, CSV, Markdown, JSON, or text artifact.",
+            "description": "Create a real downloadable artifact file in the current thread. Use this whenever the user asks for an Excel, CSV, Markdown, JSON, or text artifact. After calling this tool, do not repeat the artifact body in chat; only summarize that the file was created.",
             "parameters": {
                 "type": "object",
                 "properties": {

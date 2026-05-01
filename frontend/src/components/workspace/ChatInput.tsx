@@ -13,6 +13,15 @@ import type { ThreadMessage, ThreadFile, ExecutionStep } from "@/types";
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/api/v1";
 const ACCEPTED_TYPES = ".pdf,.docx,.xlsx,.xlsm,.csv,.md,.txt,.json,.png,.jpg,.jpeg";
 
+type AttachedFile = {
+  localId: string;
+  name: string;
+  size: number;
+  status: "uploading" | "ready" | "error";
+  record?: ThreadFile;
+  error?: string;
+};
+
 // ── Debug logger ─────────────────────────────────────────────
 type DebugEntry = { ts: string; level: "info" | "warn" | "error"; msg: string };
 const MAX_DEBUG_ENTRIES = 200;
@@ -76,7 +85,7 @@ export default function ChatInput() {
   } = useExecutionStore();
 
   const [text, setText] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const [sending, setSending] = useState(false);
   const [wsDisconnected, setWsDisconnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -86,8 +95,56 @@ export default function ChatInput() {
   const pendingMessageRef = useRef<string | null>(null);
   const tracePlaceholderIdRef = useRef<string | null>(null);
 
+  const hasUploadingAttachments = attachments.some((file) => file.status === "uploading");
+  const readyAttachments = attachments.filter((file) => file.status === "ready" && file.record);
   const canSend =
-    (text.trim().length > 0 || files.length > 0) && !isStreaming && !sending && activeThreadId;
+    (text.trim().length > 0 || readyAttachments.length > 0) &&
+    !hasUploadingAttachments &&
+    !isStreaming &&
+    !sending &&
+    activeThreadId;
+
+  const uploadFiles = useCallback(
+    (selectedFiles: FileList | File[]) => {
+      if (!activeThreadId) return;
+
+      Array.from(selectedFiles).forEach((file) => {
+        const localId = `${file.name}-${file.size}-${Date.now()}-${Math.random()}`;
+        setAttachments((prev) => [
+          ...prev,
+          { localId, name: file.name, size: file.size, status: "uploading" },
+        ]);
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        apiUpload<ThreadFile>(`/threads/${activeThreadId}/files/upload`, formData)
+          .then((record) => {
+            setAttachments((prev) =>
+              prev.map((item) =>
+                item.localId === localId
+                  ? { ...item, status: "ready", record }
+                  : item
+              )
+            );
+          })
+          .catch((error) => {
+            setAttachments((prev) =>
+              prev.map((item) =>
+                item.localId === localId
+                  ? {
+                      ...item,
+                      status: "error",
+                      error: error instanceof Error ? error.message : "Upload failed",
+                    }
+                  : item
+              )
+            );
+          });
+      });
+    },
+    [activeThreadId]
+  );
 
   // Connect to WebSocket and send start_run. Used by both initial send and reconnect.
   const connectWs = useCallback(
@@ -171,33 +228,41 @@ export default function ChatInput() {
 
     const messageText =
       text.trim() ||
-      `Please use the attached file${files.length === 1 ? "" : "s"} as task context.`;
+      `Please use the attached file${readyAttachments.length === 1 ? "" : "s"} as task context.`;
     setText("");
     setSending(true);
 
     try {
-      // Upload attached files first so the backend can parse them into run context.
-      for (const file of files) {
-        const formData = new FormData();
-        formData.append("file", file);
-        await apiUpload<ThreadFile>(`/threads/${activeThreadId}/files/upload`, formData);
-      }
-      setFiles([]);
+      const attachedFiles = readyAttachments.map((file) => ({
+        id: file.record!.id,
+        name: file.record!.file_name,
+        type: file.record!.file_type,
+        size_bytes: file.record!.file_size_bytes,
+      }));
+      setAttachments((prev) => prev.filter((file) => file.status === "error"));
 
       // Build metadata with inspector context if a step is selected
       const selectedStep = selectedStepId
         ? inspectorSteps.find((s) => s.id === selectedStepId)
         : null;
-      const metadata: Record<string, unknown> | undefined = selectedStep
-        ? {
-            inspector_context: {
-              step_id: selectedStep.id,
-              step_number: selectedStep.step_number,
-              node_name: selectedStep.node_name,
-              node_type: selectedStep.node_type,
-            },
-          }
-        : undefined;
+      const metadata: Record<string, unknown> | undefined =
+        selectedStep || attachedFiles.length > 0
+          ? {
+              ...(selectedStep
+                ? {
+                    inspector_context: {
+                      step_id: selectedStep.id,
+                      step_number: selectedStep.step_number,
+                      node_name: selectedStep.node_name,
+                      node_type: selectedStep.node_type,
+                    },
+                  }
+                : {}),
+              ...(attachedFiles.length > 0
+                ? { attached_files: attachedFiles }
+                : {}),
+            }
+          : undefined;
 
       // Create user message via API
       const userMsg = await apiPost<ThreadMessage>(
@@ -240,7 +305,7 @@ export default function ChatInput() {
       setSending(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canSend, activeThreadId, text, files, connectWs]);
+  }, [canSend, activeThreadId, text, readyAttachments, connectWs]);
 
   function handleWsEvent(data: Record<string, unknown>) {
     const type = data.type as string;
@@ -638,8 +703,8 @@ export default function ChatInput() {
     }
   }
 
-  function removeFile(idx: number) {
-    setFiles((prev) => prev.filter((_, i) => i !== idx));
+  function removeFile(localId: string) {
+    setAttachments((prev) => prev.filter((file) => file.localId !== localId));
   }
 
   // Resolve selected step for the indicator
@@ -680,17 +745,29 @@ export default function ChatInput() {
       )}
 
       {/* File chips */}
-      {files.length > 0 && (
+      {attachments.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1.5">
-          {files.map((file, i) => (
+          {attachments.map((file) => (
             <span
-              key={i}
-              className="flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
+              key={file.localId}
+              className={cn(
+                "flex items-center gap-1 rounded-full px-2 py-0.5 text-xs",
+                file.status === "ready" && "bg-emerald-50 text-emerald-700",
+                file.status === "uploading" && "bg-blue-50 text-blue-700",
+                file.status === "error" && "bg-red-50 text-red-700"
+              )}
             >
               {file.name}
+              <span className="text-[10px] opacity-70">
+                {file.status === "uploading"
+                  ? "uploading"
+                  : file.status === "ready"
+                    ? "ready for context"
+                    : file.error || "failed"}
+              </span>
               <button
-                onClick={() => removeFile(i)}
-                className="text-slate-400 hover:text-slate-600"
+                onClick={() => removeFile(file.localId)}
+                className="opacity-60 hover:opacity-100"
               >
                 <X className="size-3" />
               </button>
@@ -715,8 +792,7 @@ export default function ChatInput() {
           multiple
           className="hidden"
           onChange={(e) => {
-            if (e.target.files)
-              setFiles((prev) => [...prev, ...Array.from(e.target.files!)]);
+            if (e.target.files) uploadFiles(e.target.files);
             e.target.value = "";
           }}
         />
