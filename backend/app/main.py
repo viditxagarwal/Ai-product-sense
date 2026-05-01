@@ -1,12 +1,14 @@
 import logging
+import os
 import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.config import CORS_ORIGINS
+from app.config import CORS_ORIGINS, UPLOAD_DIR
 
 # ── Logging setup ────────────────────────────────────────────
 logging.basicConfig(
@@ -36,6 +38,8 @@ from app.routers import (
 )
 
 app = FastAPI(title="AI Product Studio", version="0.1.0")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # Rate limiting error handler
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

@@ -15,6 +15,7 @@ import httpx
 
 from app.database import supabase
 from app.services.api_key_service import _decrypt
+from app.services.file_context_service import extract_file_text
 
 logger = logging.getLogger("ws.tools")
 
@@ -126,6 +127,8 @@ async def execute_tool_call(
             return await _execute_web_search(arguments, user_id)
         elif tool_name == "calculator":
             return _execute_calculator(arguments)
+        elif tool_name == "document_reader":
+            return _execute_document_reader(arguments, user_id)
         else:
             return json.dumps({
                 "status": "executed",
@@ -197,6 +200,50 @@ def _execute_calculator(args: dict) -> str:
         return json.dumps({"result": result, "expression": expr})
     except Exception as e:
         return json.dumps({"error": f"Calculation failed: {e}"})
+
+
+def _execute_document_reader(args: dict, user_id: str) -> str:
+    """Read a previously uploaded thread file by name or URL."""
+    requested = (
+        args.get("file_name")
+        or args.get("filename")
+        or args.get("url")
+        or args.get("input")
+        or ""
+    )
+    if not requested:
+        return json.dumps({"error": "No file name or URL provided"})
+
+    resp = (
+        supabase.table("thread_files")
+        .select("*, threads!inner(user_id)")
+        .eq("source", "user_upload")
+        .eq("threads.user_id", str(user_id))
+        .execute()
+    )
+    files = resp.data or []
+    match = None
+    requested_lower = str(requested).lower()
+    for file in files:
+        name = str(file.get("file_name", "")).lower()
+        url = str(file.get("file_url", "")).lower()
+        if requested_lower in name or requested_lower in url or name in requested_lower:
+            match = file
+            break
+    if not match and files:
+        match = files[-1]
+
+    if not match:
+        return json.dumps({"error": f"No uploaded file found for '{requested}'"})
+
+    parsed = extract_file_text(match, max_chars=20000)
+    return json.dumps({
+        "file_name": match.get("file_name"),
+        "file_type": match.get("file_type"),
+        "status": parsed["status"],
+        "note": parsed.get("note"),
+        "content": parsed["text"],
+    })
 
 
 def _get_user_api_key(user_id: str, provider: str) -> str | None:

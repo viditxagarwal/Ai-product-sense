@@ -3,7 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { Send, Paperclip, Loader2, X, Crosshair, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { apiPost, getStoredToken } from "@/lib/api";
+import { apiPost, apiUpload, getStoredToken } from "@/lib/api";
 import { useThreadStore } from "@/stores/thread-store";
 import { useExecutionStore } from "@/stores/execution-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
@@ -168,16 +168,11 @@ export default function ChatInput() {
     setSending(true);
 
     try {
-      // Upload any attached files first
+      // Upload attached files first so the backend can parse them into run context.
       for (const file of files) {
-        await apiPost<ThreadFile>(`/threads/${activeThreadId}/files`, {
-          thread_id: activeThreadId,
-          file_name: file.name,
-          file_url: `/uploads/${file.name}`,
-          file_type: file.type || "application/octet-stream",
-          file_size_bytes: file.size,
-          source: "user_upload",
-        });
+        const formData = new FormData();
+        formData.append("file", file);
+        await apiUpload<ThreadFile>(`/threads/${activeThreadId}/files/upload`, formData);
       }
       setFiles([]);
 

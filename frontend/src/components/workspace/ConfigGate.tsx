@@ -15,7 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { useDomainStore } from "@/stores/domain-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import { useThreadStore } from "@/stores/thread-store";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiUpload } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type {
   WorkflowResponse,
@@ -86,18 +86,11 @@ export default function ConfigGate() {
         instructions,
       });
 
-      // Upload files if any
-      // For v1, we create file records with placeholder URLs
-      // Real Supabase Storage upload would go here
+      // Upload files so the backend can parse them into the first run context.
       for (const file of files) {
-        await apiPost<ThreadFile>(`/threads/${thread.id}/files`, {
-          thread_id: thread.id,
-          file_name: file.name,
-          file_url: `/uploads/${file.name}`,
-          file_type: file.type || "application/octet-stream",
-          file_size_bytes: file.size,
-          source: "user_upload",
-        });
+        const formData = new FormData();
+        formData.append("file", file);
+        await apiUpload<ThreadFile>(`/threads/${thread.id}/files/upload`, formData);
       }
 
       setActiveThreadId(thread.id);

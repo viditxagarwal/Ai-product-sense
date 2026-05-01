@@ -1,12 +1,13 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 
 from app.dependencies import get_current_user_id
 from app.models.thread import ThreadCreate, ThreadResponse
 from app.models.thread_message import ThreadMessageCreate, ThreadMessageResponse
 from app.models.thread_file import ThreadFileCreate, ThreadFileResponse
 from app.services import thread_service, thread_file_service
+from app.services.file_context_service import save_thread_upload
 
 router = APIRouter(prefix="/threads", tags=["Threads"])
 
@@ -67,3 +68,12 @@ def create_thread_file(
     user_id: UUID = Depends(get_current_user_id),
 ):
     return thread_file_service.create_file(user_id, thread_id, data)
+
+
+@router.post("/{thread_id}/files/upload", response_model=ThreadFileResponse, status_code=201)
+async def upload_thread_file(
+    thread_id: UUID,
+    file: UploadFile = File(...),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    return await save_thread_upload(str(user_id), str(thread_id), file)

@@ -28,6 +28,10 @@ from app.services.llm_service import (
     StreamingContext,
     call_llm_streaming,
 )
+from app.services.file_context_service import (
+    build_thread_file_context,
+    persist_artifacts_from_output,
+)
 from app.services.prompt_injector import build_config_injections
 from app.services.tool_executor import (
     build_openai_tools,
@@ -403,6 +407,29 @@ def _streaming_flags(streaming_mode: str | None) -> tuple[bool, bool]:
     )
 
 
+def _with_file_context(user_message: str, file_context: dict | None) -> str:
+    """Attach parsed thread files to the user message that enters the graph."""
+    if not file_context or not file_context.get("text"):
+        return user_message
+    return (
+        f"{user_message}\n\n"
+        "## Assembled task context from uploaded files\n"
+        f"{file_context['text']}"
+    )
+
+
+def _artifact_instruction() -> str:
+    return (
+        "\n\n## Artifact generation contract\n"
+        "When the user asks for a downloadable or reusable artifact, include each artifact as a fenced block "
+        "using this exact format:\n"
+        '```artifact filename="descriptive-name.md" type="text/markdown"\n'
+        "<artifact content>\n"
+        "```\n"
+        "Use the right extension and MIME type, for example text/markdown, text/csv, application/json, or text/plain."
+    )
+
+
 # ══════════════════════════════════════════════════════════════
 # Resolve thread context
 # ══════════════════════════════════════════════════════════════
@@ -444,6 +471,7 @@ def _get_thread_context(thread_id: str) -> dict:
         else:
             system_prompt = t["instructions"]
 
+    system_prompt += _artifact_instruction()
     result["system_prompt"] = system_prompt
 
     c = cfg.data if cfg.data else {}
@@ -502,6 +530,8 @@ async def _direct_llm_call(
     temperature = ctx["temperature"]
     max_tokens = ctx["max_tokens"]
     top_p = ctx.get("top_p", 1.0)
+    llm_user_message = ctx.get("assembled_user_message") or user_message
+    file_context = ctx.get("file_context") or {"files": [], "total_chars": 0}
     buffer_size = ctx.get("buffer_size_messages", 20)
 
     messages = []
@@ -512,7 +542,7 @@ async def _direct_llm_call(
     if history and history[-1]["role"] == "user" and history[-1]["content"] == user_message:
         history = history[:-1]
     messages.extend(history)
-    messages.append({"role": "user", "content": user_message})
+    messages.append({"role": "user", "content": llm_user_message})
 
     logger.info("[exec] Direct LLM call: model=%s messages=%d fallback=%s", model, len(messages), is_fallback)
 
@@ -557,7 +587,17 @@ async def _direct_llm_call(
         "node_type": "direct_llm",
         "node_name": f"Direct Chat ({model})",
         "status": "running",
-        "input_payload": {"node_id": "direct"},
+        "input_payload": {
+            "node_id": "direct",
+            "raw_user_message": user_message,
+            "assembled_context": {
+                "source": "thread_files",
+                "file_count": len(file_context.get("files", [])),
+                "parsed_characters": file_context.get("total_chars", 0),
+                "files": file_context.get("files", []),
+                "preview": (file_context.get("text") or "")[:4000],
+            },
+        },
     }).execute()
     step_id = step.data[0]["id"]
 
@@ -566,8 +606,8 @@ async def _direct_llm_call(
         node_label=f"Direct Chat ({model})",
         node_type="direct_llm",
         component_config={"model": model, "temperature": temperature, "max_output_tokens": max_tokens},
-        input_context=user_message,
-        input_context_source="user_message",
+        input_context=llm_user_message,
+        input_context_source="user_message+thread_files" if file_context.get("files") else "user_message",
     )
 
     await send_event({
@@ -681,6 +721,16 @@ async def _direct_llm_call(
             total_cost_usd=streaming_ctx.total_cost_usd, path_taken=["direct"],
         )
 
+        created_files = persist_artifacts_from_output(thread_id, full_response, trigger_step_id=step_id)
+        for file in created_files:
+            await send_event({
+                "type": "file_created",
+                "file_id": file["file_id"],
+                "file_name": file["file_name"],
+                "file_type": file["file_type"],
+                "operation_type": "creation",
+            })
+
         await send_event({
             "type": "run_completed",
             "run_id": run_id,
@@ -709,10 +759,11 @@ async def _direct_llm_call(
                 "tokens": streaming_ctx.total_tokens,
                 "cost_usd": round(streaming_ctx.total_cost_usd, 6),
                 "duration_ms": duration_ms,
+                "files": created_files,
             },
         }).execute()
 
-        await send_event({"type": "assistant_message", "content": full_response})
+        await send_event({"type": "assistant_message", "content": full_response, "files": created_files})
 
         logger.info("[exec] Direct LLM call completed: %d chars, %dms, %d tokens, $%.6f",
                      len(full_response), duration_ms, streaming_ctx.total_tokens, streaming_ctx.total_cost_usd)
@@ -759,6 +810,20 @@ async def execute_workflow(thread_id: str, user_message: str, send_event):
             "error": f"Failed to load thread context: {e}",
         })
         return
+
+    max_context_chars = int((ctx.get("config") or {}).get("max_context_tokens", 12000)) * 4
+    file_context = build_thread_file_context(thread_id, max_chars=min(max_context_chars, 60000))
+    assembled_user_message = _with_file_context(user_message, file_context)
+    ctx["file_context"] = file_context
+    ctx["assembled_user_message"] = assembled_user_message
+
+    if file_context.get("files"):
+        await send_event({
+            "type": "context_assembled",
+            "file_count": len(file_context["files"]),
+            "parsed_characters": file_context.get("total_chars", 0),
+            "files": file_context["files"],
+        })
 
     logger.info("[exec] Context resolved: model=%s workflow=%s config=%s prompt_len=%d",
                 ctx["model"],
@@ -983,13 +1048,28 @@ async def _execute_workflow_graph(
                     "node_name": node_name,
                     "status": "completed",
                     "duration_ms": 0,
-                    "input_payload": {"node_id": current_node_id},
-                    "output_payload": {"status": f"{node_type}_passthrough"},
+                    "input_payload": {
+                        "node_id": current_node_id,
+                        "raw_user_message": user_message if node_type == "start" else None,
+                        "assembled_context": {
+                            "source": "thread_files",
+                            "file_count": len(file_context.get("files", [])),
+                            "parsed_characters": file_context.get("total_chars", 0),
+                            "files": file_context.get("files", []),
+                            "preview": (file_context.get("text") or "")[:4000],
+                        } if node_type == "start" else None,
+                    },
+                    "output_payload": {
+                        "status": f"{node_type}_passthrough",
+                        "output_preview": (llm_user_message if node_type == "start" else "")[:1000],
+                    },
                 }).execute()
 
                 node_event_id = await emitter.node_started(
                     node_id=current_node_id, node_label=node_name,
                     node_type=node_type, component_config={},
+                    input_context=llm_user_message if node_type == "start" else "",
+                    input_context_source="user_message+thread_files" if node_type == "start" and file_context.get("files") else "user_message",
                 )
                 await emitter.node_completed(
                     node_id=current_node_id, status="completed", output_result="passthrough",
@@ -1013,7 +1093,7 @@ async def _execute_workflow_graph(
                     "result_summary": f"{node_name} — passthrough",
                 })
 
-                node_outputs[current_node_id] = user_message if node_type == "start" else node_outputs.get(current_node_id, "")
+                node_outputs[current_node_id] = llm_user_message if node_type == "start" else node_outputs.get(current_node_id, "")
 
                 if node_type == "end":
                     break
@@ -1444,8 +1524,12 @@ async def _execute_workflow_graph(
                 node_id=current_node_id, node_label=node_name,
                 node_type=node_type,
                 component_config=node_config,
-                input_context=str(prev_output)[:1000] if prev_output else user_message,
-                input_context_source="previous_step" if prev_output else "user_message",
+                input_context=str(prev_output)[:1000] if prev_output else llm_user_message,
+                input_context_source=(
+                    "previous_step"
+                    if prev_output
+                    else "user_message+thread_files" if file_context.get("files") else "user_message"
+                ),
             )
 
             elapsed_so_far = int((time.monotonic() - start_time) * 1000)
@@ -1532,14 +1616,14 @@ async def _execute_workflow_graph(
             if mapped_context:
                 context_str = json.dumps(mapped_context, indent=2)
                 node_messages.append({"role": "user", "content":
-                    f"{user_message}\n\nMapped input:\n{context_str}"
+                    f"{llm_user_message}\n\nMapped input:\n{context_str}"
                 })
             elif prev_output:
                 node_messages.append({"role": "user", "content":
                     f"{user_message}\n\nPrevious step output:\n{prev_output}"
                 })
             else:
-                node_messages.append({"role": "user", "content": user_message})
+                node_messages.append({"role": "user", "content": llm_user_message})
 
             # Execute LLM
             try:
@@ -1666,6 +1750,16 @@ async def _execute_workflow_graph(
             total_cost_usd=total_cost, path_taken=path_taken,
         )
 
+        created_files = persist_artifacts_from_output(thread_id, str(last_output), trigger_step_id=None)
+        for file in created_files:
+            await send_event({
+                "type": "file_created",
+                "file_id": file["file_id"],
+                "file_name": file["file_name"],
+                "file_type": file["file_type"],
+                "operation_type": "creation",
+            })
+
         await send_event({
             "type": "run_completed",
             "run_id": run_id,
@@ -1706,10 +1800,11 @@ async def _execute_workflow_graph(
                     "duration_ms": total_duration,
                     "llm_calls": total_llm_calls,
                     "tool_calls": total_tool_calls,
+                    "files": created_files,
                 },
             }).execute()
 
-            await send_event({"type": "assistant_message", "content": last_output})
+            await send_event({"type": "assistant_message", "content": last_output, "files": created_files})
 
         logger.info("[exec] Workflow run completed: %d steps, %dms, %d tokens, $%.6f",
                      step_counter, total_duration, total_tokens, total_cost)

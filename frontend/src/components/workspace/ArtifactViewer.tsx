@@ -12,7 +12,7 @@ import {
   GitCompare,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { apiGet } from "@/lib/api";
+import { apiAssetUrl, apiGet } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace-store";
 import type { ThreadFile, FileChange } from "@/types";
 import ExcelViewer from "./ExcelViewer";
@@ -110,8 +110,8 @@ export default function ArtifactViewer() {
 
     const viewerType = classifyFile(file);
 
-    // For simulated files, show a placeholder
-    if (file.file_url.startsWith("/simulated/") || file.file_url.startsWith("/uploads/")) {
+    // For legacy simulated files, show a placeholder.
+    if (file.file_url.startsWith("/simulated/")) {
       if (viewerType === "markdown") {
         setTextContent(
           `# ${file.file_name}\n\n` +
@@ -132,8 +132,9 @@ export default function ArtifactViewer() {
     }
 
     // Fetch real content
+    const fileUrl = apiAssetUrl(file.file_url);
     if (viewerType === "excel") {
-      fetch(file.file_url)
+      fetch(fileUrl)
         .then((r) => r.arrayBuffer())
         .then(setBinaryContent)
         .catch(() => setBinaryContent(null));
@@ -142,7 +143,7 @@ export default function ArtifactViewer() {
       setTextContent(null);
       setBinaryContent(null);
     } else {
-      fetch(file.file_url)
+      fetch(fileUrl)
         .then((r) => r.text())
         .then(setTextContent)
         .catch(() => setTextContent(null));
@@ -193,6 +194,7 @@ export default function ArtifactViewer() {
 
   const viewerType = classifyFile(file);
   const Icon = getIcon(file.file_type);
+  const fileUrl = apiAssetUrl(file.file_url);
 
   return (
     <div className="flex h-full flex-col">
@@ -235,9 +237,9 @@ export default function ArtifactViewer() {
         ) : viewerType === "csv" && textContent ? (
           <CsvViewer content={textContent} />
         ) : viewerType === "pdf" ? (
-          <PdfViewer fileUrl={file.file_url} />
+          <PdfViewer fileUrl={fileUrl} />
         ) : viewerType === "image" ? (
-          <ImageViewer fileUrl={file.file_url} fileName={file.file_name} />
+          <ImageViewer fileUrl={fileUrl} fileName={file.file_name} />
         ) : viewerType === "code" && textContent ? (
           <CodeViewer
             content={textContent}

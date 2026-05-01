@@ -107,6 +107,59 @@ export function apiPost<T>(path: string, body?: unknown): Promise<T> {
   });
 }
 
+export async function apiUpload<T>(path: string, formData: FormData): Promise<T> {
+  if (authFailed) {
+    throw new Error("Session expired");
+  }
+
+  const token = tokenAccessor?.();
+  if (!token) {
+    throw new Error("Not authenticated");
+  }
+
+  let res = await fetch(`${BASE_URL}${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+
+  if (res.status === 401 && tokenRefresher && !authFailed) {
+    const newToken = await deduplicatedRefresh();
+    if (newToken) {
+      res = await fetch(`${BASE_URL}${path}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${newToken}` },
+        body: formData,
+      });
+    }
+  }
+
+  if (res.status === 401) {
+    authFailed = true;
+    if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+      window.location.href = "/login";
+    }
+    throw new Error("Session expired");
+  }
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: res.statusText }));
+    const message = error.detail || `API error: ${res.status}`;
+    toast.error(message);
+    throw new Error(message);
+  }
+
+  return res.json();
+}
+
+export function apiAssetUrl(path: string): string {
+  if (!path || path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+  const origin = new URL(BASE_URL).origin;
+  return `${origin}${path}`;
+}
+
 export function apiPatch<T>(path: string, body: unknown): Promise<T> {
   return apiFetch<T>(path, {
     method: "PATCH",
