@@ -591,6 +591,7 @@ export default function ChatInput() {
 
       // ── Human review completed (activity log) ──────────
       case "human_review_completed": {
+        setPendingGate(null);
         addActivityEntry({
           eventType: "human_review_completed",
           description: `Gate ${data.action as string}: ${(data.reviewer_comment as string) || "no comment"}`,

@@ -40,6 +40,8 @@ export default function ImageViewer({ fileUrl, fileName }: ImageViewerProps) {
 
       {/* Image */}
       <div className="flex-1 overflow-auto p-4">
+        {/* Generic artifact previews need to support arbitrary uploaded/blob URLs and natural image sizing. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={fileUrl}
           alt={fileName}

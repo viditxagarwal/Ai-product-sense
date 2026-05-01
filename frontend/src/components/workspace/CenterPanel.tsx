@@ -22,7 +22,7 @@ export default function CenterPanel() {
   const { activeThread, messages, messagesLoading, fetchThread, fetchMessages } =
     useThreadStore();
   const { domains } = useDomainStore();
-  const { streamingText } = useExecutionStore();
+  const { streamingText, displaySettings, fetchDisplaySettings } = useExecutionStore();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const activeDomain = domains.find((d) => d.id === activeDomainId);
@@ -34,6 +34,13 @@ export default function CenterPanel() {
       fetchMessages(activeThreadId);
     }
   }, [activeThreadId, fetchThread, fetchMessages]);
+
+  // Live streaming surfaces also depend on display settings, not just Inspector.
+  useEffect(() => {
+    if (!displaySettings) {
+      fetchDisplaySettings();
+    }
+  }, [displaySettings, fetchDisplaySettings]);
 
   // Auto-scroll to bottom on new messages or streaming text
   useEffect(() => {

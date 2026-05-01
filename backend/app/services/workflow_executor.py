@@ -785,7 +785,7 @@ async def _execute_node_llm(
 ) -> tuple[str, StreamingContext]:
     """Execute an LLM call for a single node. Returns (output_text, streaming_ctx)."""
     user_id = ctx["user_id"]
-    model = node_data.get("model", ctx["model"])
+    model = node_data.get("modelOverride") or node_data.get("model") or ctx["model"]
     temperature = node_data.get("temperature", ctx["temperature"])
     max_tokens = node_data.get("maxOutputTokens", ctx["max_tokens"])
     top_p = ctx.get("top_p", 1.0)
@@ -1413,7 +1413,7 @@ async def _execute_workflow_graph(
 
             node_config = {
                 "llmEnabled": node_data.get("llmEnabled", True),
-                "model": node_data.get("model", model),
+                "model": node_data.get("modelOverride") or node_data.get("model") or model,
                 "temperature": node_data.get("temperature", temperature),
                 "max_output_tokens": node_data.get("maxOutputTokens", max_tokens),
                 "systemPrompt": node_data.get("systemPrompt", ""),
@@ -1578,7 +1578,7 @@ async def _execute_workflow_graph(
                     "thinking_tokens": streaming_ctx.total_thinking_tokens,
                     "llm_calls": len(streaming_ctx.llm_calls),
                     "tool_calls": len(streaming_ctx.tool_calls),
-                    "model": node_data.get("model", model),
+                    "model": node_data.get("modelOverride") or node_data.get("model") or model,
                 },
             }).eq("id", step_id).execute()
 

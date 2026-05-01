@@ -18,7 +18,7 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/api/v1";
 
 export default function GateReviewPanel() {
-  const { pendingGate } = useExecutionStore();
+  const { pendingGate, setPendingGate } = useExecutionStore();
   const { activeThreadId } = useWorkspaceStore();
   const [comment, setComment] = useState("");
   const [sending, setSending] = useState(false);
@@ -55,13 +55,28 @@ export default function GateReviewPanel() {
             comment: comment.trim(),
           })
         );
-        // Close after a short delay to allow the message to be sent
-        setTimeout(() => ws.close(), 500);
+      };
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "gate_review_ack") {
+            setPendingGate(null);
+            setComment("");
+            setSending(false);
+            ws.close();
+          } else if (data.type === "error") {
+            setSending(false);
+          }
+        } catch {
+          setSending(false);
+        }
+      };
+      ws.onclose = () => {
+        setSending(false);
       };
       ws.onerror = () => {
         setSending(false);
       };
-      // The main WS will receive gate_review_ack and clear pendingGate
     } catch {
       setSending(false);
     }

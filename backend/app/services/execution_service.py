@@ -308,13 +308,13 @@ async def test_single_step(
     if configuration_id:
         cfg = (
             supabase.table("configurations")
-            .select("config_data")
+            .select("*")
             .eq("id", configuration_id)
             .single()
             .execute()
         )
         if cfg.data:
-            config_snapshot = cfg.data.get("config_data", {})
+            config_snapshot = cfg.data
 
     node_data = node.get("data", {})
     start = _time.time()
@@ -327,7 +327,7 @@ async def test_single_step(
         system_prompt = node_data.get("systemPrompt", "You are a helpful assistant.")
 
         # Fetch tools if bound
-        tool_ids = node_data.get("boundToolIds", [])
+        tool_ids = node_data.get("boundTools") or node_data.get("boundToolIds", [])
         tools_openai = []
         tools_map = {}
         if tool_ids:
@@ -339,7 +339,13 @@ async def test_single_step(
         user_input = input_payload.get("message", input_payload.get("input", str(input_payload)))
         messages.append({"role": "user", "content": str(user_input)})
 
-        model = node_data.get("model", config_snapshot.get("model", "gpt-4o-mini"))
+        model = (
+            node_data.get("modelOverride")
+            or node_data.get("model")
+            or config_snapshot.get("primary_model")
+            or config_snapshot.get("model")
+            or "gpt-4o-mini"
+        )
         temperature = node_data.get("temperature", config_snapshot.get("temperature", 0.7))
 
         # Non-streaming call for test via OpenAI-compatible client

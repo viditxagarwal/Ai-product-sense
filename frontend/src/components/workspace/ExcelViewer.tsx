@@ -20,7 +20,7 @@ export default function ExcelViewer({ content }: ExcelViewerProps) {
     }
   }, [content]);
 
-  const sheetNames = workbook?.SheetNames ?? [];
+  const sheetNames = useMemo(() => workbook?.SheetNames ?? [], [workbook]);
 
   const { headers, rows } = useMemo(() => {
     if (!workbook || sheetNames.length === 0) return { headers: [], rows: [] };
