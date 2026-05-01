@@ -61,6 +61,7 @@ export default function ChatInput() {
     setRunError,
     appendStreamingText,
     appendStreamingThinkingText,
+    setIsThinking,
     clearStreamingText,
     setPendingGate,
     addLiveTool,
@@ -318,6 +319,7 @@ export default function ChatInput() {
       case "text_delta": {
         const content = data.content as string;
         if (content) {
+          setIsThinking(false);
           appendStreamingText(content);
         }
         break;
@@ -326,6 +328,7 @@ export default function ChatInput() {
       case "thinking_delta": {
         const content = data.content as string;
         if (content) {
+          setIsThinking(true);
           appendStreamingThinkingText(content);
         }
         break;
