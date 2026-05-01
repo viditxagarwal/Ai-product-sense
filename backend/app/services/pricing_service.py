@@ -18,6 +18,9 @@ _pricing_cache: dict[str, dict] = {}
 
 # Hardcoded fallback prices ($/1M tokens) — May 2025
 _FALLBACK_PRICING = {
+    "claude-opus-4-6":   {"input": 15.00, "output": 75.00, "cache_read": 1.50, "cache_write": 18.75, "thinking": 75.00},
+    "claude-sonnet-4-6": {"input": 3.00,  "output": 15.00, "cache_read": 0.30, "cache_write": 3.75,  "thinking": 15.00},
+    "claude-haiku-4-5":  {"input": 0.80,  "output": 4.00,  "cache_read": 0.08, "cache_write": 1.00,  "thinking": 4.00},
     "claude-opus-4":     {"input": 15.00, "output": 75.00, "cache_read": 1.50, "cache_write": 18.75, "thinking": 75.00},
     "claude-sonnet-4":   {"input": 3.00,  "output": 15.00, "cache_read": 0.30, "cache_write": 3.75,  "thinking": 15.00},
     "claude-haiku-3.5":  {"input": 0.80,  "output": 4.00,  "cache_read": 0.08, "cache_write": 1.00,  "thinking": 0},

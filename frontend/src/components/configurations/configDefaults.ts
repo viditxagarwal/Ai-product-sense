@@ -8,7 +8,7 @@ export const CONFIG_DEFAULTS: Record<string, unknown> = {
   is_baseline: false,
 
   // Model Settings
-  primary_model: "claude-sonnet-4",
+  primary_model: "claude-sonnet-4-6",
   fallback_model: "gpt-4o-mini",
   per_node_model_override: true,
   model_selection_strategy: "fixed",
@@ -125,8 +125,11 @@ export const CONFIG_DEFAULTS: Record<string, unknown> = {
 
 /** Model options for dropdowns */
 export const MODEL_OPTIONS = [
-  { value: "claude-sonnet-4", label: "Claude Sonnet 4" },
+  { value: "claude-opus-4-6", label: "Claude Opus 4.6" },
+  { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+  { value: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
   { value: "claude-opus-4", label: "Claude Opus 4" },
+  { value: "claude-sonnet-4", label: "Claude Sonnet 4" },
   { value: "claude-haiku-3.5", label: "Claude Haiku 3.5" },
   { value: "gpt-4o", label: "GPT-4o" },
   { value: "gpt-4o-mini", label: "GPT-4o Mini" },
