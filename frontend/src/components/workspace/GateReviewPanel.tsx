@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Shield,
   Check,
@@ -18,7 +18,7 @@ import { useWorkspaceStore } from "@/stores/workspace-store";
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/api/v1";
 
 export default function GateReviewPanel() {
-  const { pendingGate, setPendingGate } = useExecutionStore();
+  const { pendingGate } = useExecutionStore();
   const { activeThreadId } = useWorkspaceStore();
   const [comment, setComment] = useState("");
   const [sending, setSending] = useState(false);

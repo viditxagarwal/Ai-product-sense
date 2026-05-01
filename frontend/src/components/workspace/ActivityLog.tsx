@@ -5,27 +5,10 @@ import {
   ChevronDown,
   ChevronRight,
   Activity,
-  Filter,
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useExecutionStore, type ActivityLogEntry } from "@/stores/execution-store";
-
-const EVENT_ICONS: Record<string, string> = {
-  run_started: "play_arrow",
-  run_completed: "check_circle",
-  step_started: "arrow_forward",
-  step_completed: "check",
-  tool_started: "build",
-  tool_completed: "build_circle",
-  edge_evaluated: "call_split",
-  loop_iteration: "loop",
-  split_started: "fork_right",
-  split_completed: "merge",
-  gate_review_requested: "shield",
-  human_review_completed: "gavel",
-  error: "error",
-};
+import { useExecutionStore } from "@/stores/execution-store";
 
 const SEVERITY_COLORS: Record<string, string> = {
   info: "text-slate-500",
@@ -44,21 +27,15 @@ const SEVERITY_BG: Record<string, string> = {
 export default function ActivityLog() {
   const { activityLog, clearActivityLog, displaySettings } = useExecutionStore();
   const bottomRef = useRef<HTMLDivElement>(null);
-  const [filter, setFilter] = useState<string>("");
   const [collapsed, setCollapsed] = useState(false);
-
-  // Don't render if setting is off
-  if (displaySettings && !displaySettings.show_activity_log) return null;
-
-  const filtered = filter
-    ? activityLog.filter((e) => e.eventType.includes(filter))
-    : activityLog;
 
   // Auto-scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [activityLog.length]);
 
+  // Don't render if setting is off
+  if (displaySettings && !displaySettings.show_activity_log) return null;
   if (activityLog.length === 0) return null;
 
   return (
@@ -90,7 +67,7 @@ export default function ActivityLog() {
 
       {!collapsed && (
         <div className="max-h-48 overflow-y-auto px-3 pb-2 space-y-0.5">
-          {filtered.map((entry) => (
+          {activityLog.map((entry) => (
             <div
               key={entry.id}
               className={cn(
