@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Globe,
   GitBranch,
@@ -26,9 +26,20 @@ import type {
 
 const ACCEPTED_TYPES = ".pdf,.docx,.xlsx,.xlsm,.csv,.md,.txt,.json,.png,.jpg,.jpeg";
 
+function workflowNodeCount(workflow: WorkflowResponse): number {
+  return (workflow.graph_data?.nodes ?? []).filter(
+    (node: Record<string, unknown>) => !["start", "end"].includes(node.type as string)
+  ).length;
+}
+
 export default function ConfigGate() {
   const { domains } = useDomainStore();
-  const { activeDomainId, setConfigGateOpen, setActiveThreadId } = useWorkspaceStore();
+  const {
+    activeDomainId,
+    setActiveDomainId,
+    setConfigGateOpen,
+    setActiveThreadId,
+  } = useWorkspaceStore();
   const { createThread } = useThreadStore();
 
   const [workflows, setWorkflows] = useState<WorkflowResponse[]>([]);
@@ -45,19 +56,32 @@ export default function ConfigGate() {
   const dropRef = useRef<HTMLDivElement>(null);
 
   const activeDomain = domains.find((d) => d.id === activeDomainId);
+  const selectedWorkflow = workflows.find((wf) => wf.id === workflowId);
+  const selectedWorkflowDomain = domains.find((d) => d.id === selectedWorkflow?.domain_id);
+  const effectiveDomain = selectedWorkflowDomain || activeDomain;
+  const domainById = useMemo(
+    () => new Map(domains.map((domain) => [domain.id, domain])),
+    [domains]
+  );
+  const sortedWorkflows = useMemo(() => {
+    return [...workflows].sort((a, b) => {
+      const aActive = a.domain_id === activeDomainId ? 0 : 1;
+      const bActive = b.domain_id === activeDomainId ? 0 : 1;
+      if (aActive !== bActive) return aActive - bActive;
+      return a.workflow_name.localeCompare(b.workflow_name);
+    });
+  }, [workflows, activeDomainId]);
 
-  // Fetch workflows for selected domain
+  // Fetch all workflows so newly created workflows are selectable even if the
+  // left-panel domain is stale or different from the workflow's domain.
   useEffect(() => {
-    if (!activeDomainId) return;
     setLoadingWf(true);
     setWorkflowId("");
-    apiGet<PaginatedResponse<WorkflowResponse>>(
-      `/workflows?domain_id=${activeDomainId}&per_page=100`
-    )
+    apiGet<PaginatedResponse<WorkflowResponse>>("/workflows?per_page=100")
       .then((res) => setWorkflows(res.data))
       .catch(() => setWorkflows([]))
       .finally(() => setLoadingWf(false));
-  }, [activeDomainId]);
+  }, []);
 
   // Fetch all configurations
   useEffect(() => {
@@ -68,18 +92,26 @@ export default function ConfigGate() {
       .finally(() => setLoadingCfg(false));
   }, []);
 
-  const canSubmit = activeDomainId && workflowId && configId && !submitting;
+  const threadDomainId = selectedWorkflow?.domain_id || activeDomainId;
+  const canSubmit = threadDomainId && workflowId && configId && !submitting;
+
+  function workflowOptionLabel(workflow: WorkflowResponse) {
+    const domain = domainById.get(workflow.domain_id);
+    const domainLabel = domain ? ` · ${domain.display_name}` : "";
+    const scopeLabel = workflow.domain_id === activeDomainId ? "" : " · other domain";
+    return `${workflow.workflow_name}${domainLabel}${scopeLabel} · ${workflowNodeCount(workflow)} nodes`;
+  }
 
   async function handleSubmit() {
     if (!canSubmit) return;
     setSubmitting(true);
     try {
-      const title = activeDomain
-        ? `${activeDomain.display_name} — ${new Date().toLocaleDateString()}`
+      const title = effectiveDomain
+        ? `${effectiveDomain.display_name} — ${new Date().toLocaleDateString()}`
         : "New Thread";
 
       const thread = await createThread({
-        domain_id: activeDomainId!,
+        domain_id: threadDomainId!,
         workflow_id: workflowId,
         configuration_id: configId,
         title,
@@ -94,6 +126,9 @@ export default function ConfigGate() {
       }
 
       setActiveThreadId(thread.id);
+      if (selectedWorkflow?.domain_id && selectedWorkflow.domain_id !== activeDomainId) {
+        setActiveDomainId(selectedWorkflow.domain_id);
+      }
     } catch {
       // Toast handled by api client
     } finally {
@@ -179,15 +214,20 @@ export default function ConfigGate() {
             <option value="">
               {loadingWf ? "Loading workflows..." : "Select a workflow"}
             </option>
-            {workflows.map((wf) => (
+            {sortedWorkflows.map((wf) => (
               <option key={wf.id} value={wf.id}>
-                {wf.workflow_name} · {(wf.graph_data?.nodes ?? []).filter((n: Record<string, unknown>) => !["start", "end"].includes(n.type as string)).length} nodes
+                {workflowOptionLabel(wf)}
               </option>
             ))}
           </select>
           {workflows.length === 0 && !loadingWf && (
             <p className="text-xs text-amber-600">
-              No workflows found for this domain. Create one in the Workflows module.
+              No workflows found. Create one in the Workflows module.
+            </p>
+          )}
+          {selectedWorkflowDomain && selectedWorkflowDomain.id !== activeDomainId && (
+            <p className="text-xs text-slate-500">
+              This thread will use the workflow&apos;s domain: {selectedWorkflowDomain.display_name}.
             </p>
           )}
         </div>

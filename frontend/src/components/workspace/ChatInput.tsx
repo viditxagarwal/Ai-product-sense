@@ -467,6 +467,13 @@ export default function ChatInput() {
           description: `Run completed (${data.total_duration_ms as number}ms, ${data.total_tokens as number} tokens, $${(data.total_cost_usd as number)?.toFixed(4)})`,
           severity: "success",
         });
+        if (data.langsmith_trace_url) {
+          addActivityEntry({
+            eventType: "langsmith_trace",
+            description: `LangSmith trace available: ${data.langsmith_trace_url as string}`,
+            severity: "info",
+          });
+        }
         setStreaming(false);
         break;
       }
@@ -498,7 +505,14 @@ export default function ChatInput() {
             role: "assistant",
             content,
             message_type: "text",
-            metadata: data.files ? { files: data.files } : null,
+            metadata:
+              data.files || data.langsmith_trace_url || data.runtime
+                ? {
+                    files: data.files,
+                    langsmith_trace_url: data.langsmith_trace_url,
+                    runtime: data.runtime,
+                  }
+                : null,
             created_at: new Date().toISOString(),
           };
           addLocalMessage(msg);

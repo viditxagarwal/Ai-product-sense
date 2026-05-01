@@ -4,6 +4,7 @@ from fastapi import HTTPException
 
 from app.database import supabase
 from app.models.workflow import WorkflowCreate, WorkflowUpdate
+from app.services.agent_runtime.compiler import validate_langgraph_compatibility
 
 
 def list_workflows(user_id: UUID, page: int = 1, per_page: int = 20, domain_id: UUID | None = None) -> dict:
@@ -101,7 +102,12 @@ def validate_graph(graph_data: dict) -> dict:
 
     if not nodes:
         errors.append("Graph has no nodes")
-        return {"valid": False, "errors": errors, "warnings": warnings}
+        return {
+            "valid": False,
+            "errors": errors,
+            "warnings": warnings,
+            "langgraph": validate_langgraph_compatibility(graph_data),
+        }
 
     node_ids = {n["id"] for n in nodes}
 
@@ -156,8 +162,11 @@ def validate_graph(graph_data: dict) -> dict:
         if ct not in ("start", "end") and n["id"] not in connected:
             warnings.append(f"Node '{n.get('data', {}).get('label', n['id'])}' is disconnected")
 
+    langgraph = validate_langgraph_compatibility(graph_data)
+
     return {
         "valid": len(errors) == 0,
         "errors": errors,
         "warnings": warnings,
+        "langgraph": langgraph,
     }

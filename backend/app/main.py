@@ -79,6 +79,7 @@ async def debug_status():
     """Diagnostic endpoint — shows config, DB connectivity, and active WS runs."""
     from app.routers.stream import _active_runs
     from app.database import supabase as db
+    from app.services.agent_runtime import runtime_status
 
     checks: dict = {"server": "ok", "cors_origins": CORS_ORIGINS}
 
@@ -100,5 +101,6 @@ async def debug_status():
     from app.config import SUPABASE_URL, SUPABASE_JWT_SECRET
     checks["supabase_url"] = SUPABASE_URL[:40] + "..." if SUPABASE_URL else "MISSING"
     checks["jwt_secret_set"] = bool(SUPABASE_JWT_SECRET)
+    checks["agent_runtime"] = runtime_status()
 
     return checks

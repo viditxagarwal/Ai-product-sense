@@ -38,6 +38,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { apiPost } from "@/lib/api";
 import {
   Tooltip,
   TooltipContent,
@@ -81,6 +82,20 @@ import { migrateWorkflowData } from "@/lib/workflow-migration";
 
 interface WorkflowCanvasProps {
   workflowId: string;
+}
+
+interface LangGraphValidation {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  capabilities?: Record<string, boolean>;
+}
+
+interface WorkflowValidation {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  langgraph?: LangGraphValidation;
 }
 
 // ─── Helpers ───
@@ -210,6 +225,8 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
   const [entryPoint, setEntryPoint] = useState("");
   const [exitPoint, setExitPoint] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [validation, setValidation] = useState<WorkflowValidation | null>(null);
+  const [validating, setValidating] = useState(false);
 
   // Deletion state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -361,6 +378,22 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
       setSaveStatus("idle");
     }
   }, [workflowId, updateWorkflow]);
+
+  const validateForLangGraph = useCallback(async () => {
+    setValidating(true);
+    try {
+      await performSave();
+      const result = await apiPost<WorkflowValidation>(`/workflows/${workflowId}/validate`);
+      setValidation(result);
+      if (result.langgraph?.valid && result.valid) {
+        toast.success("Workflow can compile to LangGraph.");
+      } else {
+        toast.warning("Workflow needs changes before LangGraph runtime.");
+      }
+    } finally {
+      setValidating(false);
+    }
+  }, [performSave, workflowId]);
 
   useEffect(() => {
     if (currentWorkflow) scheduleSave();
@@ -983,6 +1016,15 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
             Templates
           </Button>
 
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={validateForLangGraph}
+            disabled={validating || saveStatus === "saving"}
+          >
+            {validating ? "Checking..." : "Check LangGraph"}
+          </Button>
+
           <Button size="sm" onClick={performSave} disabled={saveStatus === "saving"}>
             {saveStatus === "saving" ? (
               <>Saving...</>
@@ -996,6 +1038,22 @@ function WorkflowCanvasInner({ workflowId }: WorkflowCanvasProps) {
           <Badge variant="secondary" className="text-[10px]">
             {nodes.length} step{nodes.length !== 1 ? "s" : ""} · {edges.length} connection{edges.length !== 1 ? "s" : ""}
           </Badge>
+          {validation?.langgraph && (
+            <Badge
+              variant={validation.langgraph.valid && validation.valid ? "default" : "destructive"}
+              className="text-[10px]"
+              title={[
+                ...validation.errors,
+                ...(validation.langgraph.errors || []),
+                ...validation.warnings,
+                ...(validation.langgraph.warnings || []),
+              ].join("\n")}
+            >
+              {validation.langgraph.valid && validation.valid
+                ? "LangGraph ready"
+                : "LangGraph issues"}
+            </Badge>
+          )}
         </div>
       </div>
 

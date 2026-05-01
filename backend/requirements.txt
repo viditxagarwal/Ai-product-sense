@@ -12,4 +12,11 @@ httpx>=0.25
 openai>=1.0
 pypdf>=4.0
 python-docx
+langchain>=0.3
+langchain-core>=0.3
+langchain-openai>=0.2
+langchain-anthropic>=0.2
+langchain-google-genai>=2.0
+langgraph>=0.2
+langsmith>=0.1
 

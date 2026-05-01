@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from app.database import supabase
 from app.dependencies import get_current_user_id
-from app.services.workflow_executor import execute_workflow
+from app.services.agent_runtime import execute_workflow, resume_workflow
 
 logger = logging.getLogger("ws.stream")
 
@@ -193,6 +193,8 @@ async def thread_stream(websocket: WebSocket, thread_id: str):
                 if not action:
                     await send_event({"type": "error", "message": "gate_review requires 'action' field"})
                 elif resolve_gate(thread_id, action, comment):
+                    await send_event({"type": "gate_review_ack", "action": action})
+                elif await resume_workflow(thread_id, {"action": action, "comment": comment}, send_event):
                     await send_event({"type": "gate_review_ack", "action": action})
                 else:
                     await send_event({"type": "error", "message": "No pending gate review for this thread"})
