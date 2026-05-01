@@ -652,25 +652,28 @@ async def _call_anthropic_streaming_enhanced(
     body: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": temperature,
-        "top_p": top_p,
         "messages": conv_messages,
         "stream": True,
     }
-    if system_text.strip():
-        body["system"] = system_text.strip()
-    if stop_sequences:
-        body["stop_sequences"] = stop_sequences
 
-    # Extended thinking (Anthropic)
+    # Anthropic does NOT allow both temperature and top_p simultaneously.
+    # If the user customised top_p away from the 1.0 default, honour that
+    # and omit temperature; otherwise send temperature and omit top_p.
     if thinking_enabled and thinking_budget_tokens > 0:
         body["thinking"] = {
             "type": "enabled",
             "budget_tokens": thinking_budget_tokens,
         }
-        # Anthropic requires removing temperature when thinking is enabled
-        body.pop("temperature", None)
-        body.pop("top_p", None)
+        # Anthropic requires removing both when thinking is enabled
+    elif top_p is not None and top_p != 1.0:
+        body["top_p"] = top_p
+    else:
+        body["temperature"] = temperature
+
+    if system_text.strip():
+        body["system"] = system_text.strip()
+    if stop_sequences:
+        body["stop_sequences"] = stop_sequences
 
     call_result = LLMCallResult(
         model_id=model,
