@@ -961,6 +961,8 @@ async def _execute_workflow_graph(
     temperature = ctx["temperature"]
     max_tokens = ctx["max_tokens"]
     buffer_size = ctx.get("buffer_size_messages", 20)
+    llm_user_message = ctx.get("assembled_user_message") or user_message
+    file_context = ctx.get("file_context") or {"files": [], "total_chars": 0, "text": ""}
 
     workflow = ctx.get("workflow", {})
     run = supabase.table("execution_runs").insert({

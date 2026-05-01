@@ -686,7 +686,7 @@ async def _call_anthropic_streaming_enhanced(
             "https://api.anthropic.com/v1/messages",
             headers={
                 "x-api-key": api_key,
-                "anthropic-version": "2024-10-22",
+                "anthropic-version": "2023-06-01",
                 "Content-Type": "application/json",
             },
             json=body,
