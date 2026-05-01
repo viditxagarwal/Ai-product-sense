@@ -15,6 +15,9 @@ out/
 dist/
 build/
 
+# Runtime uploads/artifacts
+backend/uploads/
+
 # Python
 *.egg-info/
 .venv/

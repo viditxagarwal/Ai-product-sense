@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import type { ThreadMessage, ThreadFile, ExecutionStep } from "@/types";
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/api/v1";
-const ACCEPTED_TYPES = ".pdf,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg";
+const ACCEPTED_TYPES = ".pdf,.docx,.xlsx,.xlsm,.csv,.md,.txt,.json,.png,.jpg,.jpeg";
 
 // ── Debug logger ─────────────────────────────────────────────
 type DebugEntry = { ts: string; level: "info" | "warn" | "error"; msg: string };
@@ -47,7 +47,13 @@ export function clearWsDebugLog() {
 }
 
 export default function ChatInput() {
-  const { activeThreadId, selectedStepId, setSelectedStepId } = useWorkspaceStore();
+  const {
+    activeThreadId,
+    selectedStepId,
+    setActiveRightTab,
+    setSelectedFileId,
+    setSelectedStepId,
+  } = useWorkspaceStore();
   const { inspectorSteps } = useExecutionStore();
   const { addLocalMessage, updateLocalMessage } = useThreadStore();
   const {
@@ -81,7 +87,7 @@ export default function ChatInput() {
   const tracePlaceholderIdRef = useRef<string | null>(null);
 
   const canSend =
-    text.trim().length > 0 && !isStreaming && !sending && activeThreadId;
+    (text.trim().length > 0 || files.length > 0) && !isStreaming && !sending && activeThreadId;
 
   // Connect to WebSocket and send start_run. Used by both initial send and reconnect.
   const connectWs = useCallback(
@@ -163,7 +169,9 @@ export default function ChatInput() {
   const handleSend = useCallback(async () => {
     if (!canSend || !activeThreadId) return;
 
-    const messageText = text.trim();
+    const messageText =
+      text.trim() ||
+      `Please use the attached file${files.length === 1 ? "" : "s"} as task context.`;
     setText("");
     setSending(true);
 
@@ -349,14 +357,19 @@ export default function ChatInput() {
 
       // ── File events ──────────────────────────────────
       case "file_created": {
+        const fileId = data.file_id as string;
         const associatedStep = lastStepIdRef.current;
         if (associatedStep) {
           setStepFileEvent(associatedStep, {
-            file_id: data.file_id as string,
+            file_id: fileId,
             file_name: data.file_name as string,
             file_type: data.file_type as string,
             operation: "created",
           });
+        }
+        if (fileId) {
+          setSelectedFileId(fileId);
+          setActiveRightTab("artifacts");
         }
         break;
       }

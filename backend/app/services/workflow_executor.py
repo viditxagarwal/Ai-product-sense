@@ -479,6 +479,7 @@ def _get_thread_context(thread_id: str) -> dict:
     result["temperature"] = float(c.get("temperature", 0.2))
     result["max_tokens"] = c.get("max_output_tokens", 4096)
     result["top_p"] = float(c.get("top_p", 1.0))
+    result["thread_id"] = thread_id
     result["max_tool_calls_per_node"] = c.get("max_tool_calls_per_node", 10)
     result["parallel_tool_calls"] = c.get("parallel_tool_calls", True)
     result["tool_call_timeout"] = c.get("tool_call_timeout", 30)
@@ -512,6 +513,42 @@ def _get_conversation_history(thread_id: str, limit: int = 50) -> list[dict]:
     return messages
 
 
+def _build_conversation_context(thread_id: str, ctx: dict) -> list[dict]:
+    """Build conversation history based on the configured memory strategy."""
+    config = ctx.get("config") or {}
+    strategy = config.get("memory_type", "buffer_window")
+    buffer_size = ctx.get("buffer_size_messages", 20)
+
+    if strategy == "buffer" or strategy == "full_history":
+        # Include all messages
+        return _get_conversation_history(thread_id, limit=500)
+
+    if strategy == "buffer_window" or strategy == "sliding_window":
+        return _get_conversation_history(thread_id, limit=buffer_size)
+
+    if strategy == "token_buffer":
+        # Fetch more messages, then trim to approximate token budget
+        buffer_tokens = int(config.get("buffer_size_tokens", 8000))
+        messages = _get_conversation_history(thread_id, limit=100)
+        trimmed = []
+        token_estimate = 0
+        for m in reversed(messages):
+            msg_tokens = len(m.get("content", "")) // 4  # rough estimate
+            if token_estimate + msg_tokens > buffer_tokens:
+                break
+            trimmed.insert(0, m)
+            token_estimate += msg_tokens
+        return trimmed
+
+    if strategy == "summary":
+        # Use buffer_window as base, with a note that summary should be generated
+        # Full summary implementation requires an extra LLM call - stub for now
+        return _get_conversation_history(thread_id, limit=buffer_size)
+
+    # Default: buffer_window
+    return _get_conversation_history(thread_id, limit=buffer_size)
+
+
 # ══════════════════════════════════════════════════════════════
 # Direct LLM call (fallback)
 # ══════════════════════════════════════════════════════════════
@@ -538,7 +575,7 @@ async def _direct_llm_call(
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
 
-    history = _get_conversation_history(thread_id, limit=buffer_size)
+    history = _build_conversation_context(thread_id, ctx)
     if history and history[-1]["role"] == "user" and history[-1]["content"] == user_message:
         history = history[:-1]
     messages.extend(history)
@@ -628,7 +665,12 @@ async def _direct_llm_call(
             config.get("streaming_mode", "text_and_thinking")
         )
 
+        _thinking_started_flag_direct = [False]  # mutable container for closure
+
         async def _on_thinking_delta_direct(text):
+            if not _thinking_started_flag_direct[0]:
+                _thinking_started_flag_direct[0] = True
+                await emitter.thinking_started(node_id="direct", parent_event_id=node_event_id)
             if _stream_thinking:
                 await send_event({"type": "thinking_delta", "content": text})
 
@@ -883,7 +925,7 @@ async def _execute_node_llm(
         tool_records = fetch_tools_by_ids(bound_tool_ids)
         if tool_records:
             openai_tools = build_openai_tools(tool_records)
-            tool_exec_fn = partial(execute_tool_call, user_id=user_id)
+            tool_exec_fn = partial(execute_tool_call, user_id=user_id, thread_id=ctx.get("thread_id"))
             logger.info("[exec] Node '%s' has %d bound tools", node_id, len(openai_tools))
 
     step_output = ""
@@ -916,10 +958,27 @@ async def _execute_node_llm(
             node_id=node_id, tool_data=tool_result.to_dict(),
             parent_event_id=node_event_id,
         )
+        try:
+            parsed = json.loads(tool_result.output_result)
+        except (TypeError, json.JSONDecodeError):
+            return
+        if parsed.get("file_id"):
+            await send_event({
+                "type": "file_created",
+                "file_id": parsed["file_id"],
+                "file_name": parsed.get("file_name", "Artifact"),
+                "file_type": parsed.get("file_type", ""),
+                "operation_type": "creation",
+            })
 
     _g_stream_text, _g_stream_thinking = _streaming_flags(graph_streaming_mode)
 
+    _thinking_started_flag = [False]  # mutable container for closure
+
     async def _on_thinking_delta(text):
+        if not _thinking_started_flag[0]:
+            _thinking_started_flag[0] = True
+            await emitter.thinking_started(node_id=node_id, parent_event_id=node_event_id)
         if _g_stream_thinking:
             await send_event({"type": "thinking_delta", "content": text})
 
@@ -933,7 +992,7 @@ async def _execute_node_llm(
         on_tool_start=_on_tool_start,
         on_tool_complete=_on_tool_complete,
         on_thinking_delta=_on_thinking_delta,
-        max_tool_rounds=ctx.get("max_tool_calls_per_node", 10),
+        max_tool_rounds=node_data.get("maxToolIterations") or ctx.get("max_tool_calls_per_node", 10),
         parallel_tool_calls=ctx.get("parallel_tool_calls", True),
         tool_call_timeout=ctx.get("tool_call_timeout", 30),
         tool_retry_on_failure=ctx.get("tool_retry_on_failure", 0),
@@ -993,7 +1052,7 @@ async def _execute_workflow_graph(
         "config_snapshot": config_snapshot,
     })
 
-    history = _get_conversation_history(thread_id, limit=buffer_size)
+    history = _build_conversation_context(thread_id, ctx)
     if history and history[-1]["role"] == "user" and history[-1]["content"] == user_message:
         history = history[:-1]
 

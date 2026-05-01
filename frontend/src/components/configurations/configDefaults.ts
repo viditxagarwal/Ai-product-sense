@@ -31,11 +31,15 @@ export const CONFIG_DEFAULTS: Record<string, unknown> = {
   context_source: "combined",
   file_context_strategy: "relevant_sections",
   max_context_tokens: 16384,
+  conversation_history_window: 20,
+  summary_frequency: 5,
+  fact_extraction_enabled: false,
   context_priority_order: "system_prompt → files → memory → rag",
   persistent_knowledge: "knowledge_base_only",
 
   // RAG Settings
   kb_enabled: true,
+  rag_top_k: 5,
   chunk_strategy: "recursive",
   chunk_size_tokens: 512,
   chunk_overlap_tokens: 64,
@@ -82,6 +86,7 @@ export const CONFIG_DEFAULTS: Record<string, unknown> = {
   tool_result_handling: "structured",
   max_tool_calls_per_node: 10,
   parallel_tool_calls: true,
+  include_tool_results_in_context: true,
 
   // Guardrail Ordering & Trigger
   guardrail_priority_order: [

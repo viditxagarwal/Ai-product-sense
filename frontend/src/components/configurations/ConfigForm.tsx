@@ -220,6 +220,22 @@ function ToggleField({
   );
 }
 
+function getTemperatureZone(temp: number): { label: string; color: string } {
+  if (temp === 0) return { label: "Deterministic", color: "text-blue-600" };
+  if (temp <= 0.3) return { label: "Focused", color: "text-green-600" };
+  if (temp <= 0.6) return { label: "Balanced", color: "text-yellow-600" };
+  if (temp <= 0.9) return { label: "Creative", color: "text-orange-600" };
+  return { label: "Experimental", color: "text-red-600" };
+}
+
+const TOKEN_PRESETS = [
+  { label: "Short", value: 256 },
+  { label: "Medium", value: 1024 },
+  { label: "Long", value: 4096 },
+  { label: "Full Doc", value: 8192 },
+  { label: "Max", value: 16384 },
+];
+
 // Options maps
 const opts = (vals: string[]) => vals.map((v) => ({ value: v, label: v.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) }));
 
@@ -374,10 +390,36 @@ export default function ConfigForm() {
             />
           </Field>
           <SelectField label="Model Selection Strategy" fieldKey="model_selection_strategy" form={form} onChange={update} options={opts(["fixed", "cost_optimized", "quality_optimized", "adaptive"])} />
-          <NumberField label="Max Output Tokens" fieldKey="max_output_tokens" form={form} onChange={update} min={256} max={32768} step={256} />
+          <div className="space-y-1.5">
+            <NumberField label="Max Output Tokens" fieldKey="max_output_tokens" form={form} onChange={update} min={256} max={32768} step={256} />
+            <div className="flex flex-wrap gap-1 mt-1">
+              {TOKEN_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => update("max_output_tokens", preset.value)}
+                  className={`rounded px-1.5 py-0.5 text-[10px] border hover:bg-slate-100 ${
+                    Number(form.max_output_tokens) === preset.value
+                      ? "border-slate-400 bg-slate-100 text-slate-700"
+                      : "border-slate-200 text-slate-500"
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <SliderField label="Temperature" fieldKey="temperature" form={form} onChange={update} min={0} max={2} step={0.1} />
+          <div className="space-y-0">
+            <SliderField label="Temperature" fieldKey="temperature" form={form} onChange={update} min={0} max={2} step={0.1} />
+            {(() => {
+              const zone = getTemperatureZone(Number(form.temperature ?? 0));
+              return (
+                <span className={`text-[10px] font-medium ${zone.color}`}>{zone.label}</span>
+              );
+            })()}
+          </div>
           <SliderField label="Top P" fieldKey="top_p" form={form} onChange={update} min={0.1} max={1.0} step={0.05} />
         </div>
         <div className="mt-4 space-y-3">
@@ -400,12 +442,16 @@ export default function ConfigForm() {
         <div className="grid gap-4 sm:grid-cols-2">
           <SelectField label="Memory Type" fieldKey="memory_type" form={form} onChange={update} options={opts(["buffer", "buffer_window", "summary", "token_buffer", "vector_store", "combined"])} />
           <NumberField label="Buffer Size (Messages)" fieldKey="buffer_size_messages" form={form} onChange={update} min={1} max={100} />
+          <NumberField label="Conversation History Window" fieldKey="conversation_history_window" form={form} onChange={update} min={0} max={100} description="Number of recent messages to include in context (0 = stateless)" />
           <NumberField label="Buffer Size (Tokens)" fieldKey="buffer_size_tokens" form={form} onChange={update} min={1024} max={32768} step={1024} />
           <NumberField label="Max Context Tokens" fieldKey="max_context_tokens" form={form} onChange={update} min={1024} max={128000} step={1024} />
         </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <SelectField label="Summary Model" fieldKey="summary_model" form={form} onChange={update} options={opts(["same_as_primary", "lighter_model"])} />
           <SelectField label="Summary Trigger" fieldKey="summary_trigger" form={form} onChange={update} options={opts(["every_N_messages", "token_threshold", "manual"])} />
+          {form.memory_type === "summary" && (
+            <NumberField label="Summary Frequency" fieldKey="summary_frequency" form={form} onChange={update} min={2} max={20} description="Generate summary every N messages" />
+          )}
           <SelectField label="Cross-Thread Memory" fieldKey="cross_thread_memory" form={form} onChange={update} options={opts(["disabled", "same_domain_only", "user_profile_only", "full_cross_thread"])} />
           <SelectField label="Context Source" fieldKey="context_source" form={form} onChange={update} options={opts(["system_prompt_only", "file_context", "rag", "structured_extraction", "combined"])} />
           <SelectField label="File Context Strategy" fieldKey="file_context_strategy" form={form} onChange={update} options={opts(["full_file", "relevant_sections", "chunked_retrieval", "metadata_only"])} />
@@ -416,12 +462,16 @@ export default function ConfigForm() {
             <Input className="h-9 text-xs" value={String(form.context_priority_order ?? "")} onChange={(e) => update("context_priority_order", e.target.value)} />
           </Field>
         </div>
+        <div className="mt-4">
+          <ToggleField label="Fact Extraction" fieldKey="fact_extraction_enabled" form={form} onChange={update} description="Extract and remember key facts from conversations" />
+        </div>
       </ConfigSection>
 
       {/* Section 4: RAG Settings */}
       <ConfigSection title="RAG Settings" description="Knowledge retrieval, chunking, and reranking">
         <ToggleField label="Knowledge Base Enabled" fieldKey="kb_enabled" form={form} onChange={update} />
         <div className={`mt-4 grid gap-4 sm:grid-cols-2 ${!kbEnabled ? "pointer-events-none opacity-40" : ""}`}>
+          <NumberField label="RAG Top K Results" fieldKey="rag_top_k" form={form} onChange={update} min={1} max={50} description="Number of documents to retrieve from knowledge base" />
           <SelectField label="Chunk Strategy" fieldKey="chunk_strategy" form={form} onChange={update} options={opts(["fixed_size", "semantic", "recursive", "structural", "sentence", "paragraph", "page"])} />
           <NumberField label="Chunk Size (Tokens)" fieldKey="chunk_size_tokens" form={form} onChange={update} min={64} max={4096} step={64} />
           <NumberField label="Chunk Overlap (Tokens)" fieldKey="chunk_overlap_tokens" form={form} onChange={update} min={0} max={512} step={16} />
@@ -527,8 +577,9 @@ export default function ConfigForm() {
           <SelectField label="Result Handling" fieldKey="tool_result_handling" form={form} onChange={update} options={opts(["raw", "summarized", "structured", "truncated"])} />
           <NumberField label="Max Tool Calls Per Node" fieldKey="max_tool_calls_per_node" form={form} onChange={update} min={1} max={50} />
         </div>
-        <div className="mt-4">
+        <div className="mt-4 space-y-3">
           <ToggleField label="Parallel Tool Calls" fieldKey="parallel_tool_calls" form={form} onChange={update} description="Allow tools to be called in parallel within a node" />
+          <ToggleField label="Feed tool results back to LLM" fieldKey="include_tool_results_in_context" form={form} onChange={update} description="When off, tool output goes directly to next node without LLM re-evaluation" />
         </div>
       </ConfigSection>
 

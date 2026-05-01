@@ -26,25 +26,28 @@ class EventEmitter:
         event_type: str,
         data: dict,
         parent_event_id: str | None = None,
+        persist: bool = True,
     ) -> str:
         """Persist an event and push it to the client. Returns the event ID."""
-        try:
-            row = {
-                "execution_id": self.execution_id,
-                "event_type": event_type,
-                "data": data,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            if parent_event_id:
-                row["parent_event_id"] = parent_event_id
+        event_id = None
 
-            resp = supabase.table("execution_events").insert(row).execute()
-            event_id = resp.data[0]["id"] if resp.data else None
+        if persist:
+            try:
+                row = {
+                    "execution_id": self.execution_id,
+                    "event_type": event_type,
+                    "data": data,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                if parent_event_id:
+                    row["parent_event_id"] = parent_event_id
 
-            logger.debug("[events] Emitted %s (run=%s, id=%s)", event_type, self.execution_id[:8], event_id)
-        except Exception as e:
-            logger.warning("[events] Failed to persist event %s: %s", event_type, e)
-            event_id = None
+                resp = supabase.table("execution_events").insert(row).execute()
+                event_id = resp.data[0]["id"] if resp.data else None
+
+                logger.debug("[events] Emitted %s (run=%s, id=%s)", event_type, self.execution_id[:8], event_id)
+            except Exception as e:
+                logger.warning("[events] Failed to persist event %s: %s", event_type, e)
 
         # Push to client in real-time
         if self.send_event:
@@ -148,6 +151,12 @@ class EventEmitter:
                 })
             except Exception:
                 pass
+
+    async def thinking_started(self, node_id: str, parent_event_id: str | None = None):
+        """Emit when extended thinking begins for an LLM call."""
+        await self.emit("thinking_started", {
+            "node_id": node_id,
+        }, parent_event_id=parent_event_id, persist=False)
 
     async def tool_started(self, node_id: str, tool_name: str,
                            input_arguments: dict, input_summary: str,

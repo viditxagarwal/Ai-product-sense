@@ -155,6 +155,8 @@ def extract_file_text(file: dict, max_chars: int = 12000) -> dict[str, str]:
             }
         if file_type == "application/pdf" or file_name.lower().endswith(".pdf"):
             return _extract_pdf(path, max_chars)
+        if file_name.lower().endswith(".docx") or "wordprocessingml" in file_type:
+            return _extract_docx(path, max_chars)
         if file_name.lower().endswith((".xlsx", ".xlsm")) or "spreadsheet" in file_type:
             return _extract_xlsx(path, max_chars)
         if file_type in TEXT_TYPES or file_name.lower().endswith((".txt", ".md", ".csv", ".json", ".py", ".ts", ".js", ".sql")):
@@ -227,6 +229,42 @@ def persist_generated_artifact(
     return record
 
 
+def persist_generated_artifact_bytes(
+    thread_id: str,
+    filename: str,
+    content: bytes,
+    mime_type: str,
+    trigger_step_id: str | None = None,
+    change_summary: dict[str, Any] | None = None,
+) -> dict:
+    safe_name = _safe_filename(filename)
+    stored_name = f"{uuid4().hex}_{safe_name}"
+    file_path = _thread_upload_dir(thread_id) / stored_name
+    file_path.write_bytes(content)
+
+    record = supabase.table("thread_files").insert({
+        "thread_id": str(thread_id),
+        "file_name": filename,
+        "file_url": _public_upload_url(thread_id, stored_name),
+        "file_type": mime_type,
+        "file_size_bytes": len(content),
+        "source": "ai_generated",
+    }).execute().data[0]
+
+    version_payload: dict[str, Any] = {
+        "file_id": record["id"],
+        "version_number": 1,
+        "file_url": record["file_url"],
+        "operation_type": "creation",
+        "change_summary": change_summary or {"source": "file_writer"},
+        "created_by": "ai",
+    }
+    if trigger_step_id:
+        version_payload["trigger_step_id"] = trigger_step_id
+    supabase.table("file_versions").insert(version_payload).execute()
+    return record
+
+
 def _extract_pdf(path: Path, max_chars: int) -> dict[str, str]:
     try:
         from pypdf import PdfReader
@@ -244,6 +282,26 @@ def _extract_pdf(path: Path, max_chars: int) -> dict[str, str]:
         if sum(len(chunk) for chunk in chunks) >= max_chars:
             break
     return {"status": "parsed", "text": "\n\n".join(chunks)[:max_chars], "note": ""}
+
+
+def _extract_docx(path: Path, max_chars: int) -> dict[str, str]:
+    try:
+        from docx import Document
+    except ImportError:
+        return {
+            "status": "unsupported",
+            "text": "",
+            "note": "DOCX parsing requires the python-docx package.",
+        }
+
+    doc = Document(str(path))
+    lines = [paragraph.text for paragraph in doc.paragraphs if paragraph.text.strip()]
+    for table in doc.tables:
+        for row in table.rows:
+            values = [cell.text.strip() for cell in row.cells]
+            if any(values):
+                lines.append(" | ".join(values))
+    return {"status": "parsed", "text": "\n".join(lines)[:max_chars], "note": ""}
 
 
 def _extract_xlsx(path: Path, max_chars: int) -> dict[str, str]:
@@ -290,6 +348,8 @@ def _guess_mime(filename: str) -> str:
         return "application/json"
     if lower.endswith(".pdf"):
         return "application/pdf"
+    if lower.endswith(".docx"):
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     if lower.endswith(".xlsx"):
         return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     if lower.endswith((".png", ".jpg", ".jpeg")):

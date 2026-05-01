@@ -274,6 +274,92 @@ def get_display_settings(user_id: UUID) -> dict:
     return resp.data[0] if resp.data else default
 
 
+# ── Test Single Node (standalone) ─────────────────────────
+
+async def test_node(user_id: UUID, node_config: dict, input_data: str, config_id: str | None = None) -> dict:
+    """Execute a single node with provided config and input, no workflow required."""
+    import time as _time
+
+    # Load configuration if provided
+    config: dict = {}
+    system_prompt = ""
+    if config_id:
+        cfg = supabase.table("configurations").select("*").eq("id", config_id).single().execute()
+        if cfg.data:
+            config = cfg.data
+            if cfg.data.get("prompt_version_id"):
+                pv = (
+                    supabase.table("prompt_versions")
+                    .select("prompt_text")
+                    .eq("id", cfg.data["prompt_version_id"])
+                    .single()
+                    .execute()
+                )
+                if pv.data:
+                    system_prompt = pv.data.get("prompt_text", "")
+
+    # Build messages
+    node_system_prompt = node_config.get("systemPrompt", "") or system_prompt
+    messages: list[dict] = []
+    if node_system_prompt:
+        messages.append({"role": "system", "content": node_system_prompt})
+    messages.append({"role": "user", "content": str(input_data)})
+
+    # Resolve model parameters
+    model = (
+        node_config.get("model")
+        or node_config.get("modelOverride")
+        or config.get("primary_model", "gpt-4o-mini")
+    )
+    temperature = float(node_config.get("temperature", config.get("temperature", 0.2)))
+    max_tokens = int(node_config.get("maxOutputTokens", config.get("max_output_tokens", 4096)))
+
+    from app.services.llm_service import StreamingContext, call_llm_streaming
+
+    streaming_ctx = StreamingContext()
+    output = ""
+    start = _time.time()
+
+    try:
+        async for chunk in call_llm_streaming(
+            user_id=str(user_id),
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            streaming_ctx=streaming_ctx,
+        ):
+            output += chunk
+
+        return {
+            "output": output,
+            "tokens": {
+                "input": streaming_ctx.total_input_tokens,
+                "output": streaming_ctx.total_output_tokens,
+                "thinking": streaming_ctx.total_thinking_tokens,
+                "total": streaming_ctx.total_tokens,
+            },
+            "cost_usd": round(streaming_ctx.total_cost_usd, 6),
+            "duration_ms": streaming_ctx.total_duration_ms,
+            "llm_calls": [c.to_dict() for c in streaming_ctx.llm_calls],
+            "tool_calls": [c.to_dict() for c in streaming_ctx.tool_calls],
+            "model": model,
+            "errors": [],
+        }
+    except Exception as e:
+        elapsed_ms = int((_time.time() - start) * 1000)
+        return {
+            "output": "",
+            "tokens": {"input": 0, "output": 0, "thinking": 0, "total": 0},
+            "cost_usd": 0,
+            "duration_ms": elapsed_ms,
+            "llm_calls": [],
+            "tool_calls": [],
+            "model": model,
+            "errors": [str(e)],
+        }
+
+
 # ── Test This Step (T3.5) ────────────────────────────────
 
 async def test_single_step(
@@ -407,6 +493,36 @@ def export_run(user_id: UUID, run_id: UUID) -> dict:
         "steps": steps,
         "events": events,
         "summary": summary,
+    }
+
+
+def export_execution(run_id: str) -> dict:
+    """Export full execution data (run + steps + events) as JSON, by run_id string."""
+    run = supabase.table("execution_runs").select("*").eq("id", run_id).single().execute()
+    if not run.data:
+        raise HTTPException(status_code=404, detail="Execution run not found")
+
+    steps = (
+        supabase.table("execution_steps")
+        .select("*")
+        .eq("run_id", run_id)
+        .order("step_number")
+        .execute()
+    )
+    events = (
+        supabase.table("execution_events")
+        .select("*")
+        .eq("execution_id", run_id)
+        .order("timestamp")
+        .execute()
+    )
+
+    return {
+        "execution_id": run_id,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "execution_run": run.data,
+        "steps": steps.data or [],
+        "events": events.data or [],
     }
 
 

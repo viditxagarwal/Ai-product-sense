@@ -71,6 +71,7 @@ class LLMCallResult:
     is_retry: bool = False
     retry_reason: str = ""
     retry_attempt: int = 0
+    content_filter_flags: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -98,6 +99,7 @@ class LLMCallResult:
             "is_retry": self.is_retry,
             "retry_reason": self.retry_reason,
             "retry_attempt": self.retry_attempt,
+            "content_filter_flags": self.content_filter_flags,
         }
 
 
@@ -373,6 +375,9 @@ async def call_llm_streaming(
                     if choice.finish_reason:
                         call_result.stop_reason = choice.finish_reason
 
+                    if hasattr(choice, "content_filter_results") and choice.content_filter_results:
+                        call_result.content_filter_flags = choice.content_filter_results
+
                     if delta and delta.content:
                         if not ttft_recorded:
                             call_result.time_to_first_token_ms = int((time.monotonic() - start_time) * 1000)
@@ -570,6 +575,10 @@ async def call_llm_streaming(
                     if chunk.choices and chunk.choices[0].finish_reason:
                         call_result.stop_reason = chunk.choices[0].finish_reason
 
+                    # Capture content filter results
+                    if chunk.choices and hasattr(chunk.choices[0], "content_filter_results") and chunk.choices[0].content_filter_results:
+                        call_result.content_filter_flags = chunk.choices[0].content_filter_results
+
                 elapsed_ms = int((time.monotonic() - start_time) * 1000)
                 call_result.latency_ms = elapsed_ms
                 call_result.output_text = full_text
@@ -752,6 +761,8 @@ async def _call_anthropic_streaming_enhanced(
                     usage = event.get("usage", {})
                     call_result.stop_reason = delta.get("stop_reason", call_result.stop_reason)
                     call_result.output_tokens = usage.get("output_tokens", 0)
+                    if call_result.stop_reason == "content_filter":
+                        call_result.content_filter_flags = {"blocked": True, "provider": "anthropic"}
 
             # Finalize
             elapsed_ms = int((time.monotonic() - start_time) * 1000)

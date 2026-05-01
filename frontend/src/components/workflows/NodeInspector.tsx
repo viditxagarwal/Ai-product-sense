@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { X, Trash2, Brain, Wrench } from "lucide-react";
+import { X, Trash2, Brain, Wrench, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,9 +18,18 @@ import {
 import { resolveComponentType, NODE_TYPE_MAP } from "./nodeTypes";
 import { useToolStore } from "@/stores/tool-store";
 import ModelSelect from "@/components/shared/ModelSelect";
+import TestNodePanel from "./TestNodePanel";
 import { useAvailableModels } from "@/hooks/useAvailableModels";
 import type { Node, Edge } from "@xyflow/react";
 import type { WorkflowNodeData, WorkflowEdgeData } from "@/types";
+
+function getTemperatureZone(temp: number): { label: string; color: string } {
+  if (temp === 0) return { label: "Deterministic", color: "text-blue-600" };
+  if (temp <= 0.3) return { label: "Focused", color: "text-green-600" };
+  if (temp <= 0.6) return { label: "Balanced", color: "text-yellow-600" };
+  if (temp <= 0.9) return { label: "Creative", color: "text-orange-600" };
+  return { label: "Experimental", color: "text-red-600" };
+}
 
 interface NodeInspectorProps {
   node: Node | null;
@@ -40,6 +49,7 @@ export default function NodeInspector({
   const { tools, fetchTools } = useToolStore();
   const { providers } = useAvailableModels();
   const [loaded, setLoaded] = useState(false);
+  const [showTest, setShowTest] = useState(false);
 
   useEffect(() => {
     if (!loaded && tools.length === 0) {
@@ -109,9 +119,20 @@ export default function NodeInspector({
             {config.label}
           </Badge>
         </div>
-        <Button variant="ghost" size="sm" className="size-7 p-0" onClick={onClose}>
-          <X className="size-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="size-7 p-0"
+            onClick={() => setShowTest((v) => !v)}
+            title="Test node"
+          >
+            <Play className="size-3.5 text-blue-600" />
+          </Button>
+          <Button variant="ghost" size="sm" className="size-7 p-0" onClick={onClose}>
+            <X className="size-4" />
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 space-y-5 overflow-y-auto p-4">
@@ -171,7 +192,14 @@ export default function NodeInspector({
 
                 {/* Temperature */}
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Temperature</Label>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs">Temperature</Label>
+                    {d.temperature != null && (
+                      <span className={`text-[10px] font-medium ${getTemperatureZone(d.temperature as number).color}`}>
+                        {getTemperatureZone(d.temperature as number).label}
+                      </span>
+                    )}
+                  </div>
                   <Input
                     type="number" min={0} max={2} step={0.1}
                     value={d.temperature ?? ""}
@@ -179,6 +207,13 @@ export default function NodeInspector({
                     placeholder="Config default"
                     className="h-8 text-xs"
                   />
+                  <div className="flex justify-between text-[9px] text-slate-400">
+                    <span className="text-blue-400">0 Det.</span>
+                    <span className="text-green-400">0.1-0.3</span>
+                    <span className="text-yellow-400">0.4-0.6</span>
+                    <span className="text-orange-400">0.7-0.9</span>
+                    <span className="text-red-400">1.0+</span>
+                  </div>
                 </div>
 
                 {/* Bound Tools */}
@@ -203,6 +238,20 @@ export default function NodeInspector({
                     {(d.boundTools || []).length} tool{(d.boundTools || []).length !== 1 ? "s" : ""} bound
                   </p>
                 </div>
+
+                {/* Max Tool Iterations — shown when LLM enabled + tools bound */}
+                {((d.boundTools as string[]) || []).length > 0 && (
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Max Tool Iterations</Label>
+                    <Input
+                      type="number" min={1} max={20}
+                      value={(d.maxToolIterations as number) ?? 10}
+                      onChange={(e) => update("maxToolIterations", parseInt(e.target.value, 10) || 10)}
+                      className="h-8 text-xs"
+                    />
+                    <p className="text-[10px] text-slate-400">Maximum tool call rounds in the ReAct loop</p>
+                  </div>
+                )}
 
                 {/* Input Context */}
                 <div className="space-y-1.5">
@@ -471,6 +520,16 @@ export default function NodeInspector({
           </>
         )}
       </div>
+
+      {/* Test Node Panel */}
+      {showTest && (
+        <div className="border-t border-slate-200 p-4">
+          <TestNodePanel
+            nodeConfig={d as unknown as Record<string, unknown>}
+            onClose={() => setShowTest(false)}
+          />
+        </div>
+      )}
 
       {/* Delete Node Button */}
       {onDeleteNode && node && (

@@ -24,7 +24,7 @@ import type {
   ThreadFile,
 } from "@/types";
 
-const ACCEPTED_TYPES = ".pdf,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg";
+const ACCEPTED_TYPES = ".pdf,.docx,.xlsx,.xlsm,.csv,.md,.txt,.json,.png,.jpg,.jpeg";
 
 export default function ConfigGate() {
   const { domains } = useDomainStore();
@@ -256,7 +256,7 @@ export default function ConfigGate() {
               Drop files here or click to browse
             </p>
             <p className="text-[10px] text-slate-300">
-              PDF, Excel, CSV, Markdown, Text, JSON, Images
+              PDF, Word, Excel, CSV, Markdown, Text, JSON, Images
             </p>
           </div>
           <input

@@ -2,7 +2,7 @@ import json
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -219,3 +219,35 @@ def delete_alert_threshold(threshold_id: UUID, user_id: UUID = Depends(get_curre
 def get_run_alerts(run_id: UUID, user_id: UUID = Depends(get_current_user_id)):
     """Get alerts triggered by a specific run."""
     return execution_service.get_run_alerts(user_id, run_id)
+
+
+# --- Test Node (standalone) ---
+
+@router.post("/nodes/test")
+async def test_node(
+    body: dict = Body(...),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Test a single workflow node with provided input data."""
+    node_config = body.get("node_config", {})
+    input_data = body.get("input_data", "")
+    config_id = body.get("config_id")
+
+    result = await execution_service.test_node(
+        user_id=user_id,
+        node_config=node_config,
+        input_data=input_data,
+        config_id=config_id,
+    )
+    return JSONResponse(content=result)
+
+
+# --- Export Execution ---
+
+@router.get("/executions/{run_id}/export")
+def export_execution(
+    run_id: str,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Export full execution data as JSON."""
+    return execution_service.export_execution(run_id)
