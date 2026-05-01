@@ -32,12 +32,16 @@ export default function ExecutionTraceCard({ runId }: Props) {
   const [histSteps, setHistSteps] = useState<ExecutionStep[]>([]);
   const [histLoading, setHistLoading] = useState(false);
 
-  const isHistorical = !!runId;
+  const isHistorical = Boolean(runId);
+  const isCurrentRun = Boolean(runId && activeRun?.id === runId);
+  const shouldFetchHistorical = Boolean(runId && !isCurrentRun);
+  const isLiveRun = !isHistorical || isCurrentRun;
 
   useEffect(() => {
-    if (!runId) return;
-    // Don't fetch if this run is currently the active run
-    if (activeRun?.id === runId && activeSteps.length > 0) return;
+    if (!shouldFetchHistorical || !runId) {
+      setHistLoading(false);
+      return;
+    }
 
     let cancelled = false;
     setHistLoading(true);
@@ -53,33 +57,26 @@ export default function ExecutionTraceCard({ runId }: Props) {
     });
 
     return () => { cancelled = true; };
-  }, [runId, activeRun?.id, activeSteps.length]);
+  }, [runId, shouldFetchHistorical]);
 
-  // Choose data source: historical or live
-  // If runId matches the currently active run, use live data (not historical fetch)
-  const isCurrentRun = isHistorical && activeRun?.id === runId;
-  const run = isHistorical
-    ? (isCurrentRun ? activeRun : histRun)
-    : activeRun;
-  const steps = isHistorical
-    ? (isCurrentRun ? activeSteps : histSteps)
-    : activeSteps;
-  // Use live streaming state for the current active run, false for truly historical runs
-  // But always respect run.status — if the run is done, streaming is done
+  const run = isLiveRun ? activeRun : histRun;
+  const steps = isLiveRun ? activeSteps : histSteps;
+
+  // Live cards use websocket state; historical cards only use persisted run status.
   const runStatus = run?.status;
   const runIsDone = runStatus === "completed" || runStatus === "failed" || runStatus === "cancelled";
-  const streaming = runIsDone ? false : (isCurrentRun ? isStreaming : (isHistorical ? false : isStreaming));
-  const error = isCurrentRun ? runError : (isHistorical ? null : runError);
+  const streaming = runIsDone ? false : isLiveRun && isStreaming;
+  const error = isLiveRun ? runError : null;
 
   const status = runStatus ?? (streaming ? "running" : "pending");
   const isComplete = status === "completed";
   const isFailed = status === "failed" || status === "cancelled";
 
-  // Config-driven display mode (only for live mode)
-  const displayMode = !isHistorical
+  // Config-driven display mode applies to the live run, even after its run_id is attached.
+  const displayMode = isLiveRun
     ? (configSnapshot?.harness_display_mode ?? "sequential_visible")
     : "sequential_visible";
-  const stepsMode = !isHistorical
+  const stepsMode = isLiveRun
     ? (configSnapshot?.intermediate_steps_in_chat ?? "status_pills")
     : "status_pills";
 
@@ -97,7 +94,7 @@ export default function ExecutionTraceCard({ runId }: Props) {
   }
 
   // Historical loading state
-  if (isHistorical && histLoading) {
+  if (shouldFetchHistorical && histLoading) {
     return (
       <div className="my-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
         <Loader2 className="size-3.5 animate-spin text-slate-400" />
@@ -107,7 +104,7 @@ export default function ExecutionTraceCard({ runId }: Props) {
   }
 
   // No data available
-  if (isHistorical && !run && !histLoading) {
+  if (shouldFetchHistorical && !run && !histLoading) {
     return (
       <div className="my-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
         <Activity className="size-3.5 text-slate-300" />
