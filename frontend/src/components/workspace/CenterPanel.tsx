@@ -13,6 +13,9 @@ import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
 import StreamingOverlay from "./StreamingOverlay";
 import StreamingChatBubble from "./StreamingChatBubble";
+import GateReviewPanel from "./GateReviewPanel";
+import LiveToolCards from "./LiveToolCards";
+import ActivityLog from "./ActivityLog";
 
 export default function CenterPanel() {
   const { isConfigGateOpen, activeThreadId, activeDomainId } = useWorkspaceStore();
@@ -110,11 +113,18 @@ export default function CenterPanel() {
             {messages.map((msg) => (
               <ChatMessage key={msg.id} message={msg} />
             ))}
+            <LiveToolCards />
             <StreamingChatBubble />
             <div ref={bottomRef} />
           </div>
         )}
       </div>
+
+      {/* Gate Review Panel — shown when a gate node is waiting */}
+      <GateReviewPanel />
+
+      {/* Activity Log — timestamped event feed */}
+      <ActivityLog />
 
       {/* Streaming Overlay — progress bar, counters, checklist */}
       <StreamingOverlay />

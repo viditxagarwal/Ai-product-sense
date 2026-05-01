@@ -4,6 +4,7 @@ import { Settings } from "lucide-react";
 import { useExecutionStore } from "@/stores/execution-store";
 import { cn } from "@/lib/utils";
 import type { DisplaySettings } from "@/types";
+import AlertThresholdPanel from "./AlertThresholdPanel";
 
 interface ToggleItemProps {
   label: string;
@@ -142,6 +143,11 @@ export function DisplaySettingsPanel() {
           />
         ))}
       </Section>
+
+      {/* Alert Thresholds */}
+      <div className="border-t pt-2">
+        <AlertThresholdPanel />
+      </div>
     </div>
   );
 }

@@ -289,3 +289,29 @@ CREATE TRIGGER no_config_delete
     BEFORE DELETE ON configurations
     FOR EACH ROW
     EXECUTE FUNCTION prevent_config_mutation();
+
+-- ============================================================
+-- ALERT THRESHOLDS (T3.8)
+-- ============================================================
+CREATE TABLE alert_thresholds (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    metric TEXT NOT NULL,
+    operator TEXT NOT NULL CHECK (operator IN ('gt', 'gte', 'lt', 'lte')),
+    value NUMERIC NOT NULL,
+    action TEXT NOT NULL DEFAULT 'log' CHECK (action IN ('log', 'notify', 'block')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE triggered_alerts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    threshold_id UUID NOT NULL REFERENCES alert_thresholds(id) ON DELETE CASCADE,
+    run_id UUID NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    metric TEXT NOT NULL,
+    threshold_value NUMERIC NOT NULL,
+    actual_value NUMERIC NOT NULL,
+    operator TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT 'log',
+    triggered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

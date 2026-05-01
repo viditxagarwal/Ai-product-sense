@@ -1,7 +1,9 @@
+import json
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.dependencies import get_current_user_id
@@ -139,3 +141,81 @@ def update_display_settings(
 def get_model_pricing():
     """Get all model pricing for cost estimation."""
     return get_all_pricing()
+
+
+# --- Test This Step (T3.5) ---
+
+class TestStepRequest(BaseModel):
+    workflow_id: UUID
+    node_id: str
+    input_payload: dict = {}
+    configuration_id: UUID | None = None
+
+
+@router.post("/steps/test")
+async def test_step(
+    data: TestStepRequest,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Execute a single workflow node in isolation with provided input."""
+    result = await execution_service.test_single_step(
+        user_id, str(data.workflow_id), data.node_id,
+        data.input_payload, str(data.configuration_id) if data.configuration_id else None,
+    )
+    return JSONResponse(content=result)
+
+
+# --- Export & Replay (T3.6) ---
+
+@router.get("/runs/{run_id}/export")
+def export_run(run_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    """Export a full execution trace (run + steps + events) as JSON."""
+    return execution_service.export_run(user_id, run_id)
+
+
+class ReplayRequest(BaseModel):
+    thread_id: UUID
+    source_run_id: UUID
+
+
+@router.post("/runs/replay", status_code=201)
+def replay_run(data: ReplayRequest, user_id: UUID = Depends(get_current_user_id)):
+    """Create a new run by replaying a previous execution's configuration."""
+    return execution_service.create_replay_run(user_id, data.thread_id, data.source_run_id)
+
+
+# --- Alert Thresholds (T3.8) ---
+
+class AlertThresholdCreate(BaseModel):
+    metric: str  # e.g. "total_cost_usd", "total_tokens", "total_duration_ms"
+    operator: str  # "gt", "gte", "lt", "lte"
+    value: float
+    action: str = "log"  # "log", "notify", "block"
+
+
+@router.post("/alert-thresholds", status_code=201)
+def create_alert_threshold(
+    data: AlertThresholdCreate,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Create an alert threshold for execution metrics."""
+    return execution_service.create_alert_threshold(user_id, data.model_dump())
+
+
+@router.get("/alert-thresholds")
+def list_alert_thresholds(user_id: UUID = Depends(get_current_user_id)):
+    """List all alert thresholds for the user."""
+    return execution_service.list_alert_thresholds(user_id)
+
+
+@router.delete("/alert-thresholds/{threshold_id}")
+def delete_alert_threshold(threshold_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    """Delete an alert threshold."""
+    execution_service.delete_alert_threshold(user_id, threshold_id)
+    return {"status": "deleted"}
+
+
+@router.get("/runs/{run_id}/alerts")
+def get_run_alerts(run_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    """Get alerts triggered by a specific run."""
+    return execution_service.get_run_alerts(user_id, run_id)

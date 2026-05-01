@@ -274,6 +274,245 @@ def get_display_settings(user_id: UUID) -> dict:
     return resp.data[0] if resp.data else default
 
 
+# ── Test This Step (T3.5) ────────────────────────────────
+
+async def test_single_step(
+    user_id: UUID,
+    workflow_id: str,
+    node_id: str,
+    input_payload: dict,
+    configuration_id: str | None = None,
+) -> dict:
+    """Execute a single workflow node in isolation for testing."""
+    import time as _time
+    from app.services.workflow_executor import WorkflowGraph, _execute_node_llm
+
+    # Fetch workflow graph
+    wf = (
+        supabase.table("workflows")
+        .select("graph_data")
+        .eq("id", workflow_id)
+        .single()
+        .execute()
+    )
+    if not wf.data:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    graph = WorkflowGraph(wf.data.get("graph_data", {}))
+    node = graph.nodes.get(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found in workflow")
+
+    # Load configuration if provided
+    config_snapshot = {}
+    if configuration_id:
+        cfg = (
+            supabase.table("configurations")
+            .select("config_data")
+            .eq("id", configuration_id)
+            .single()
+            .execute()
+        )
+        if cfg.data:
+            config_snapshot = cfg.data.get("config_data", {})
+
+    node_data = node.get("data", {})
+    start = _time.time()
+
+    try:
+        from app.services.llm_service import StreamingContext, call_llm_streaming
+        from app.services.tool_executor import build_openai_tools, fetch_tools_by_ids
+
+        # Build system prompt from node
+        system_prompt = node_data.get("systemPrompt", "You are a helpful assistant.")
+
+        # Fetch tools if bound
+        tool_ids = node_data.get("boundToolIds", [])
+        tools_openai = []
+        tools_map = {}
+        if tool_ids:
+            tools_db = fetch_tools_by_ids(tool_ids)
+            tools_openai, tools_map = build_openai_tools(tools_db)
+
+        # Build messages
+        messages = [{"role": "system", "content": system_prompt}]
+        user_input = input_payload.get("message", input_payload.get("input", str(input_payload)))
+        messages.append({"role": "user", "content": str(user_input)})
+
+        model = node_data.get("model", config_snapshot.get("model", "gpt-4o-mini"))
+        temperature = node_data.get("temperature", config_snapshot.get("temperature", 0.7))
+
+        # Non-streaming call for test via OpenAI-compatible client
+        from app.services.llm_service import get_api_key_for_user, _resolve_provider
+
+        provider = _resolve_provider(model)
+        key_data = get_api_key_for_user(str(user_id), provider)
+        if not key_data:
+            raise Exception(f"No API key found for provider '{provider}'")
+        api_key = key_data["api_key"]
+
+        from openai import AsyncOpenAI
+        base_url = {"openai": "https://api.openai.com/v1", "groq": "https://api.groq.com/openai/v1"}.get(provider)
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+
+        kwargs: dict = {"model": model, "messages": messages, "temperature": temperature}
+        if tools_openai:
+            kwargs["tools"] = tools_openai
+
+        resp = await client.chat.completions.create(**kwargs)
+        choice = resp.choices[0]
+        elapsed_ms = int((_time.time() - start) * 1000)
+
+        return {
+            "status": "completed",
+            "node_id": node_id,
+            "node_name": node_data.get("label", node_id),
+            "output": choice.message.content or "",
+            "model": model,
+            "tokens_used": resp.usage.total_tokens if resp.usage else 0,
+            "duration_ms": elapsed_ms,
+            "tool_calls": [tc.model_dump() for tc in (choice.message.tool_calls or [])],
+        }
+
+    except Exception as e:
+        elapsed_ms = int((_time.time() - start) * 1000)
+        return {
+            "status": "failed",
+            "node_id": node_id,
+            "node_name": node_data.get("label", node_id),
+            "error": str(e),
+            "duration_ms": elapsed_ms,
+        }
+
+
+# ── Export & Replay (T3.6) ───────────────────────────────
+
+def export_run(user_id: UUID, run_id: UUID) -> dict:
+    """Export full execution trace as a portable JSON object."""
+    run = get_run(user_id, run_id)
+    steps = get_run_steps(user_id, run_id)
+    events = get_run_events(user_id, run_id)
+    summary = get_run_summary(user_id, run_id)
+
+    return {
+        "export_version": "1.0",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "run": run,
+        "steps": steps,
+        "events": events,
+        "summary": summary,
+    }
+
+
+def create_replay_run(user_id: UUID, thread_id: UUID, source_run_id: UUID) -> dict:
+    """Create a new run that references a source run for replay."""
+    source = get_run(user_id, source_run_id)
+
+    payload = {
+        "thread_id": str(thread_id),
+        "status": "pending",
+        "metadata": {
+            "replay_source": str(source_run_id),
+            "original_status": source.get("status"),
+        },
+    }
+    resp = supabase.table("execution_runs").insert(payload).execute()
+    return resp.data[0]
+
+
+# ── Alert Thresholds (T3.8) ──────────────────────────────
+
+def create_alert_threshold(user_id: UUID, threshold: dict) -> dict:
+    """Create an alert threshold for execution metrics."""
+    payload = {
+        "user_id": str(user_id),
+        **threshold,
+    }
+    resp = supabase.table("alert_thresholds").insert(payload).execute()
+    return resp.data[0]
+
+
+def list_alert_thresholds(user_id: UUID) -> list:
+    """List all alert thresholds for a user."""
+    resp = (
+        supabase.table("alert_thresholds")
+        .select("*")
+        .eq("user_id", str(user_id))
+        .order("created_at", desc=False)
+        .execute()
+    )
+    return resp.data
+
+
+def delete_alert_threshold(user_id: UUID, threshold_id: UUID) -> None:
+    """Delete an alert threshold."""
+    resp = (
+        supabase.table("alert_thresholds")
+        .delete()
+        .eq("id", str(threshold_id))
+        .eq("user_id", str(user_id))
+        .execute()
+    )
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Threshold not found")
+
+
+def get_run_alerts(user_id: UUID, run_id: UUID) -> list:
+    """Get alerts triggered by a specific run."""
+    get_run(user_id, run_id)  # verify ownership
+    resp = (
+        supabase.table("triggered_alerts")
+        .select("*")
+        .eq("run_id", str(run_id))
+        .order("triggered_at", desc=False)
+        .execute()
+    )
+    return resp.data
+
+
+def evaluate_alerts_for_run(user_id: UUID, run_id: UUID) -> list:
+    """Evaluate all user thresholds against a completed run. Returns triggered alerts."""
+    run = get_run(user_id, run_id)
+    thresholds = list_alert_thresholds(user_id)
+    triggered = []
+
+    for t in thresholds:
+        metric = t.get("metric", "")
+        operator = t.get("operator", "gt")
+        threshold_value = t.get("value", 0)
+        actual_value = run.get(metric)
+
+        if actual_value is None:
+            continue
+
+        fired = False
+        if operator == "gt" and actual_value > threshold_value:
+            fired = True
+        elif operator == "gte" and actual_value >= threshold_value:
+            fired = True
+        elif operator == "lt" and actual_value < threshold_value:
+            fired = True
+        elif operator == "lte" and actual_value <= threshold_value:
+            fired = True
+
+        if fired:
+            alert_payload = {
+                "threshold_id": t["id"],
+                "run_id": str(run_id),
+                "user_id": str(user_id),
+                "metric": metric,
+                "threshold_value": threshold_value,
+                "actual_value": actual_value,
+                "operator": operator,
+                "action": t.get("action", "log"),
+            }
+            resp = supabase.table("triggered_alerts").insert(alert_payload).execute()
+            if resp.data:
+                triggered.append(resp.data[0])
+
+    return triggered
+
+
 def update_display_settings(user_id: UUID, settings: dict) -> dict:
     """Update display settings for a user."""
     existing = get_display_settings(user_id)

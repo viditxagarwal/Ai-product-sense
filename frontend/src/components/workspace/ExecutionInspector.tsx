@@ -14,6 +14,7 @@ import {
   GitBranch,
   BarChart3,
   List,
+  Download,
 } from "lucide-react";
 import { useExecutionStore } from "@/stores/execution-store";
 import { useWorkspaceStore } from "@/stores/workspace-store";
@@ -22,6 +23,7 @@ import TimingBar from "./TimingBar";
 import InspectorNode from "./InspectorNode";
 import SpanTree from "./SpanTree";
 import AnalyticsPanel from "./AnalyticsPanel";
+import ExecutionPathView from "./ExecutionPathView";
 import { DisplaySettingsPanel } from "./DisplaySettingsPanel";
 
 export default function ExecutionInspector() {
@@ -39,6 +41,7 @@ export default function ExecutionInspector() {
     fetchRunEvents,
     fetchRunSummary,
     fetchDisplaySettings,
+    exportRun,
   } = useExecutionStore();
 
   const nodeRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -179,6 +182,23 @@ export default function ExecutionInspector() {
         ))}
         <div className="flex-1" />
         <button
+          onClick={async () => {
+            if (!selectedRunId) return;
+            const data = await exportRun(selectedRunId);
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `execution-${selectedRunId.slice(0, 8)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
+          className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          title="Export execution trace"
+        >
+          <Download className="size-3.5" />
+        </button>
+        <button
           onClick={() => setShowSettings(!showSettings)}
           className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
         >
@@ -197,6 +217,18 @@ export default function ExecutionInspector() {
       {viewMode === "timeline" && (
         <div className="border-b">
           <TimingBar steps={inspectorSteps} onSegmentClick={scrollToNode} />
+        </div>
+      )}
+
+      {/* B4/B5: Execution Path with edge conditions, loop counts, token heatmap */}
+      {viewMode === "timeline" && inspectorRun && inspectorSteps.length > 0 && (
+        <div className="border-b px-3 py-1.5">
+          <ExecutionPathView
+            run={inspectorRun}
+            steps={inspectorSteps}
+            events={inspectorEvents}
+            showHeatmap={displaySettings?.show_token_heatmap ?? false}
+          />
         </div>
       )}
 

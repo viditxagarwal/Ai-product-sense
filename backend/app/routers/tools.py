@@ -4,7 +4,10 @@ from fastapi import APIRouter, Depends, Query
 
 from app.dependencies import get_current_user_id
 from app.models.tool import ToolCreate, ToolResponse, ToolUpdate
+from pydantic import BaseModel
+
 from app.services import tool_service
+from app.services.postman_service import export_tools_as_postman, import_postman_collection
 
 router = APIRouter(prefix="/tools", tags=["Tools"])
 
@@ -44,3 +47,29 @@ def delete_tool(tool_id: UUID, user_id: UUID = Depends(get_current_user_id)):
 def seed_default_tools(user_id: UUID = Depends(get_current_user_id)):
     tools = tool_service.seed_default_tools(user_id)
     return {"seeded": len(tools), "data": tools}
+
+
+# --- Postman Integration (T3.7) ---
+
+class PostmanExportQuery(BaseModel):
+    tool_ids: list[str] | None = None
+
+
+@router.get("/postman/export")
+def postman_export(
+    user_id: UUID = Depends(get_current_user_id),
+    tool_ids: str | None = Query(None, description="Comma-separated tool IDs"),
+):
+    """Export tools as a Postman Collection v2.1."""
+    ids = tool_ids.split(",") if tool_ids else None
+    return export_tools_as_postman(str(user_id), ids)
+
+
+@router.post("/postman/import", status_code=201)
+def postman_import(
+    collection: dict,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Import a Postman Collection and create tool definitions."""
+    created = import_postman_collection(str(user_id), collection)
+    return {"imported": len(created), "data": created}

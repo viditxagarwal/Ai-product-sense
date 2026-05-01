@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { apiGet, apiPatch } from "@/lib/api";
+import { apiGet, apiPatch, apiPost, apiDelete } from "@/lib/api";
 import type {
   ExecutionRun,
   ExecutionStep,
@@ -20,6 +20,50 @@ export interface StepFileEvent {
   operation: "created" | "modified";
 }
 
+/** Pending gate review during streaming. */
+export interface PendingGateReview {
+  stepId: string;
+  nodeId: string;
+  nodeName: string;
+  reviewInstructions: string;
+  availableActions: Record<string, boolean>;
+  previousOutput: string;
+  waitDuration: string;
+  onTimeout: string;
+  requestedAt: number; // Date.now()
+}
+
+/** Live tool execution during streaming. */
+export interface LiveToolExecution {
+  id: string;
+  nodeId: string;
+  toolName: string;
+  inputSummary: string;
+  status: "running" | "completed" | "error";
+  durationMs?: number;
+  outputSummary?: string;
+  startedAt: number;
+}
+
+/** Activity log entry. */
+export interface ActivityLogEntry {
+  id: string;
+  timestamp: number;
+  eventType: string;
+  description: string;
+  nodeId?: string;
+  severity: "info" | "warn" | "error" | "success";
+}
+
+export interface AlertThreshold {
+  id: string;
+  metric: string;
+  operator: "gt" | "gte" | "lt" | "lte";
+  value: number;
+  action: "log" | "notify" | "block";
+  created_at?: string;
+}
+
 interface ExecutionStore {
   // Current run being streamed
   activeRun: Partial<ExecutionRun> | null;
@@ -38,6 +82,15 @@ interface ExecutionStore {
   // Step-level streaming data
   stepProgress: Record<string, StepProgress>; // stepId -> progress texts
   stepFileEvents: Record<string, StepFileEvent>; // stepId -> file event
+
+  // Gate review state
+  pendingGate: PendingGateReview | null;
+
+  // Live tool executions during streaming
+  liveTools: LiveToolExecution[];
+
+  // Activity log
+  activityLog: ActivityLogEntry[];
 
   // Inspector data (post-hoc)
   inspectorRun: ExecutionRun | null;
@@ -64,6 +117,18 @@ interface ExecutionStore {
   clearStreamingText: () => void;
   clearActiveRun: () => void;
 
+  // Gate review actions
+  setPendingGate: (gate: PendingGateReview | null) => void;
+
+  // Live tool actions
+  addLiveTool: (tool: LiveToolExecution) => void;
+  updateLiveTool: (id: string, updates: Partial<LiveToolExecution>) => void;
+  clearLiveTools: () => void;
+
+  // Activity log actions
+  addActivityEntry: (entry: Omit<ActivityLogEntry, "id" | "timestamp">) => void;
+  clearActivityLog: () => void;
+
   // Actions — inspector (REST)
   fetchRun: (runId: string) => Promise<void>;
   fetchRunSteps: (runId: string) => Promise<void>;
@@ -74,6 +139,15 @@ interface ExecutionStore {
   // Actions — display settings
   fetchDisplaySettings: () => Promise<void>;
   updateDisplaySettings: (settings: Partial<DisplaySettings>) => Promise<void>;
+
+  // Export
+  exportRun: (runId: string) => Promise<Record<string, unknown>>;
+
+  // Alert thresholds
+  alertThresholds: AlertThreshold[];
+  fetchAlertThresholds: () => Promise<void>;
+  createAlertThreshold: (threshold: Omit<AlertThreshold, "id" | "created_at">) => Promise<void>;
+  deleteAlertThreshold: (id: string) => Promise<void>;
 
   // Computed helpers
   getEventsForNode: (nodeId: string) => ExecutionEvent[];
@@ -95,6 +169,10 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
   stepProgress: {},
   stepFileEvents: {},
 
+  pendingGate: null,
+  liveTools: [],
+  activityLog: [],
+
   inspectorRun: null,
   inspectorSteps: [],
   inspectorEvents: [],
@@ -102,13 +180,15 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
   inspectorLoading: false,
 
   displaySettings: null,
+  alertThresholds: [],
 
   setActiveRun: (run) => set((s) => ({
     activeRun: run,
     // Reset steps and streaming text when starting a new run
     ...(run && run.id && run.id !== s.activeRun?.id
       ? { activeSteps: [], runError: null, stepProgress: {}, stepFileEvents: {},
-          streamingText: "", streamingThinkingText: "", isThinking: false }
+          streamingText: "", streamingThinkingText: "", isThinking: false,
+          pendingGate: null, liveTools: [], activityLog: [] }
       : {}),
   })),
 
@@ -164,7 +244,34 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
       isThinking: false,
       stepProgress: {},
       stepFileEvents: {},
+      pendingGate: null,
+      liveTools: [],
+      activityLog: [],
     }),
+
+  setPendingGate: (gate) => set({ pendingGate: gate }),
+
+  addLiveTool: (tool) =>
+    set((s) => ({ liveTools: [...s.liveTools, tool] })),
+
+  updateLiveTool: (id, updates) =>
+    set((s) => ({
+      liveTools: s.liveTools.map((t) =>
+        t.id === id ? { ...t, ...updates } : t
+      ),
+    })),
+
+  clearLiveTools: () => set({ liveTools: [] }),
+
+  addActivityEntry: (entry) =>
+    set((s) => ({
+      activityLog: [
+        ...s.activityLog,
+        { ...entry, id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, timestamp: Date.now() },
+      ].slice(-500), // Keep last 500 entries
+    })),
+
+  clearActivityLog: () => set({ activityLog: [] }),
 
   fetchRun: async (runId) => {
     set({ inspectorLoading: true });
@@ -247,6 +354,39 @@ export const useExecutionStore = create<ExecutionStore>((set, get) => ({
       set((s) => ({
         displaySettings: s.displaySettings ? { ...s.displaySettings, ...settings } : null,
       }));
+    } catch {
+      // ignore
+    }
+  },
+
+  // Export
+  exportRun: async (runId) => {
+    return apiGet<Record<string, unknown>>(`/runs/${runId}/export`);
+  },
+
+  // Alert thresholds
+  fetchAlertThresholds: async () => {
+    try {
+      const data = await apiGet<AlertThreshold[]>("/alert-thresholds");
+      set({ alertThresholds: data });
+    } catch {
+      // ignore
+    }
+  },
+
+  createAlertThreshold: async (threshold) => {
+    try {
+      await apiPost("/alert-thresholds", threshold);
+      get().fetchAlertThresholds();
+    } catch {
+      // ignore
+    }
+  },
+
+  deleteAlertThreshold: async (id) => {
+    try {
+      await apiDelete(`/alert-thresholds/${id}`);
+      set((s) => ({ alertThresholds: s.alertThresholds.filter((t) => t.id !== id) }));
     } catch {
       // ignore
     }

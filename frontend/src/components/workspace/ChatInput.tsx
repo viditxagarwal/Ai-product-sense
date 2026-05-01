@@ -62,6 +62,10 @@ export default function ChatInput() {
     appendStreamingText,
     appendStreamingThinkingText,
     clearStreamingText,
+    setPendingGate,
+    addLiveTool,
+    updateLiveTool,
+    addActivityEntry,
   } = useExecutionStore();
 
   const [text, setText] = useState("");
@@ -246,6 +250,11 @@ export default function ChatInput() {
           status: "running",
           step_count: (data.step_count as number) || 0,
         });
+        addActivityEntry({
+          eventType: "run_started",
+          description: `Run started (${data.step_count as number} steps)`,
+          severity: "info",
+        });
         // Attach run_id to the trace placeholder so it can load historical data
         if (tracePlaceholderIdRef.current && runId) {
           updateLocalMessage(tracePlaceholderIdRef.current, {
@@ -265,6 +274,12 @@ export default function ChatInput() {
       case "step_started": {
         const stepId = data.step_id as string;
         lastStepIdRef.current = stepId;
+        addActivityEntry({
+          eventType: "step_started",
+          description: `Step ${data.step_number as number}: ${data.node_name as string} (${data.node_type as string})`,
+          nodeId: data.node_id as string,
+          severity: "info",
+        });
 
         const step: ExecutionStep = {
           id: stepId,
@@ -371,6 +386,11 @@ export default function ChatInput() {
           total_tokens: data.total_tokens as number,
           total_cost_usd: data.total_cost_usd as number,
         });
+        addActivityEntry({
+          eventType: "run_completed",
+          description: `Run completed (${data.total_duration_ms as number}ms, ${data.total_tokens as number} tokens, $${(data.total_cost_usd as number)?.toFixed(4)})`,
+          severity: "success",
+        });
         setStreaming(false);
         break;
       }
@@ -447,6 +467,133 @@ export default function ChatInput() {
           };
           addLocalMessage(sysMsg);
         }
+        break;
+      }
+
+      // ── Gate review requested ─────────────────────────
+      case "gate_review_requested": {
+        setPendingGate({
+          stepId: data.step_id as string,
+          nodeId: data.node_id as string,
+          nodeName: data.node_name as string,
+          reviewInstructions: (data.review_instructions as string) || "",
+          availableActions: (data.available_actions as Record<string, boolean>) || {},
+          previousOutput: (data.previous_output as string) || "",
+          waitDuration: (data.wait_duration as string) || "5m",
+          onTimeout: (data.on_timeout as string) || "auto_approve",
+          requestedAt: Date.now(),
+        });
+        addActivityEntry({
+          eventType: "gate_review_requested",
+          description: `Gate review requested: ${data.node_name as string}`,
+          nodeId: data.node_id as string,
+          severity: "warn",
+        });
+        break;
+      }
+
+      case "gate_review_ack": {
+        setPendingGate(null);
+        addActivityEntry({
+          eventType: "gate_review_ack",
+          description: `Gate review action: ${data.action as string}`,
+          severity: "success",
+        });
+        break;
+      }
+
+      // ── Live tool tracking ────────────────────────────
+      case "tool_started": {
+        const toolId = (data.event_id as string) || `tool-${Date.now()}`;
+        addLiveTool({
+          id: toolId,
+          nodeId: (data.node_id as string) || "",
+          toolName: (data.tool_name as string) || "Unknown Tool",
+          inputSummary: (data.input_summary as string) || "",
+          status: "running",
+          startedAt: Date.now(),
+        });
+        addActivityEntry({
+          eventType: "tool_started",
+          description: `Tool started: ${data.tool_name as string}`,
+          nodeId: data.node_id as string,
+          severity: "info",
+        });
+        break;
+      }
+
+      case "tool_completed": {
+        const toolNodeId = data.node_id as string;
+        const toolName = data.tool_name as string;
+        // Find the matching live tool (last running one for this node+tool)
+        const liveTools = useExecutionStore.getState().liveTools;
+        const match = [...liveTools].reverse().find(
+          (t) => t.nodeId === toolNodeId && t.toolName === toolName && t.status === "running"
+        );
+        if (match) {
+          updateLiveTool(match.id, {
+            status: (data.status as string) === "error" ? "error" : "completed",
+            durationMs: data.duration_ms as number,
+            outputSummary: (data.output_summary as string) || "",
+          });
+        }
+        addActivityEntry({
+          eventType: "tool_completed",
+          description: `Tool completed: ${toolName} (${data.duration_ms as number}ms)`,
+          nodeId: toolNodeId,
+          severity: (data.status as string) === "error" ? "error" : "success",
+        });
+        break;
+      }
+
+      // ── Edge evaluation (activity log) ─────────────────
+      case "edge_evaluated": {
+        addActivityEntry({
+          eventType: "edge_evaluated",
+          description: `Edge ${data.source_node as string} → ${data.target_node as string}: ${(data.condition_result as boolean) ? "PASS" : "FAIL"} (${data.condition_method as string})`,
+          severity: (data.condition_result as boolean) ? "info" : "warn",
+        });
+        break;
+      }
+
+      // ── Loop/split events (activity log) ───────────────
+      case "loop_iteration": {
+        addActivityEntry({
+          eventType: "loop_iteration",
+          description: `Loop iteration ${data.iteration as number}/${data.max_iterations as number}`,
+          severity: "info",
+        });
+        break;
+      }
+
+      case "split_started": {
+        addActivityEntry({
+          eventType: "split_started",
+          description: `Split: ${data.branch_count as number} branches (${data.fan_out_method as string})`,
+          nodeId: data.node_id as string,
+          severity: "info",
+        });
+        break;
+      }
+
+      case "split_completed": {
+        addActivityEntry({
+          eventType: "split_completed",
+          description: `Split merged: ${data.completed_branches as number}/${data.total_branches as number} via ${data.merge_method as string}`,
+          nodeId: data.node_id as string,
+          severity: "success",
+        });
+        break;
+      }
+
+      // ── Human review completed (activity log) ──────────
+      case "human_review_completed": {
+        addActivityEntry({
+          eventType: "human_review_completed",
+          description: `Gate ${data.action as string}: ${(data.reviewer_comment as string) || "no comment"}`,
+          nodeId: data.node_id as string,
+          severity: (data.action as string) === "approve" ? "success" : "warn",
+        });
         break;
       }
 
